@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from src.optim.smoothing import get_smooth_weights
+from src.optim.smoothing import get_smooth_weights, get_wasserstein_weights
 from src.optim.baselines import Optimizer
 from numba import jit
 import warnings
@@ -43,11 +43,27 @@ class Prospect(Optimizer):
         assert oracle_reg in ["prox", "grad"]
         self.oracle_reg = oracle_reg
 
+        # Precompute cost matrix for Wasserstein if needed
+        if self.penalty == "wasserstein":
+            self.C = getattr(self.objective, "C", None)
+            if self.C is None:
+                X = self.objective.X
+                self.C = torch.cdist(X.double(), X.double(), p=2.0)
+            self.K = getattr(self.objective, "K", None)
+            if self.K is None:
+                self.K = torch.exp(-self.C / 0.1)
+        else:
+            self.C = None
+            self.K = None
+
         # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights).detach()
-        self.lam = get_smooth_weights(
-            self.losses, self.sigmas, self.shift_cost, self.penalty
-        )
+        if self.penalty == "wasserstein":
+            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
+        else:
+            self.lam = get_smooth_weights(
+                self.losses, self.sigmas, self.shift_cost, self.penalty
+            )
         self.rho = self.lam.clone()
         real_l2_reg = self.objective.l2_reg / n
 
@@ -95,10 +111,13 @@ class Prospect(Optimizer):
         # update dual weights
         # self.losses[i] = self.lrd*loss + (1-self.lrd)*self.losses[i]
         self.losses[i] = loss.detach()
+        if self.penalty == "wasserstein":
+            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
+        else:
+            self.lam = get_smooth_weights(
+                self.losses, self.sigmas, self.shift_cost, self.penalty
+            )
         cur_lam = self.lam[i]
-        self.lam = get_smooth_weights(
-            self.losses, self.sigmas, self.shift_cost, self.penalty
-        )
         rho_old = self.rho[i]
         self.rho[i] = cur_lam
 
@@ -148,11 +167,27 @@ class ProspectMoreau(Optimizer):
         self.shift_cost = n * shift_cost
         self.penalty = penalty
 
+        # Precompute cost matrix for Wasserstein if needed
+        if self.penalty == "wasserstein":
+            self.C = getattr(self.objective, "C", None)
+            if self.C is None:
+                X = self.objective.X
+                self.C = torch.cdist(X.double(), X.double(), p=2.0)
+            self.K = getattr(self.objective, "K", None)
+            if self.K is None:
+                self.K = torch.exp(-self.C / 0.1)
+        else:
+            self.C = None
+            self.K = None
+
         # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights)
-        self.lam = get_smooth_weights(
-            self.losses, self.sigmas, self.shift_cost, self.penalty
-        )
+        if self.penalty == "wasserstein":
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
+        else:
+            self.lam = get_smooth_weights(
+                self.losses, self.sigmas, self.shift_cost, self.penalty
+            )
 
         for i in range(n):
             loss = self.objective.loss(
@@ -199,9 +234,12 @@ class ProspectMoreau(Optimizer):
         self.grad_table[j] = mor_grad_j.reshape(1, -1)
 
         self.losses[j] = loss_j
-        self.lam = get_smooth_weights(
-            self.losses.detach(), self.sigmas, self.shift_cost, self.penalty
-        )
+        if self.penalty == "wasserstein":
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
+        else:
+            self.lam = get_smooth_weights(
+                self.losses.detach(), self.sigmas, self.shift_cost, self.penalty
+            )
 
         self.running_subgrad = torch.matmul(
             self.lam, self.grad_table

@@ -7,6 +7,65 @@ from numba import jit
 # warnings.filterwarnings("error")
 
 
+def sinkhorn_knopp(q, p, C, epsilon, max_iters=100, tol=1e-6):
+    """
+    Compute the Sinkhorn-Knopp optimal transport plan P and distance.
+    :param q: (torch.Tensor) shape (m,) marginal distribution
+    :param p: (torch.Tensor) shape (n,) marginal distribution
+    :param C: (torch.Tensor) shape (m, n) cost matrix
+    :param epsilon: (float) entropy regularization coefficient
+    :param max_iters: (int) maximum number of scaling iterations
+    :param tol: (float) convergence tolerance on marginal error
+    :return: P (joint plan), distance (OT distance)
+    """
+    # K has shape (m, n)
+    K = torch.exp(-C / epsilon)
+    
+    # Initialize scaling vectors
+    u = torch.ones_like(q) / len(q)
+    v = torch.ones_like(p) / len(p)
+    
+    for _ in range(max_iters):
+        u_old = u.clone()
+        # update u: u = q / (K v)
+        u = q / (torch.matmul(K, v) + 1e-16)
+        # update v: v = p / (K^T u)
+        v = p / (torch.matmul(K.T, u) + 1e-16)
+        
+        # Check convergence
+        if torch.norm(u - u_old) < tol:
+            break
+            
+    P = u[:, None] * K * v[None, :]
+    distance = torch.sum(P * C)
+    return P, distance
+
+
+def get_wasserstein_weights(losses, C, shift_cost, epsilon=0.1, K=None):
+    """
+    Compute adversarial weights subject to a Wasserstein constraint using an optimized kernel-based formulation.
+    
+    :param losses: (torch.Tensor) shape (n,) loss values at the current iterate
+    :param C: (torch.Tensor) shape (n, n) cost matrix between data points
+    :param shift_cost: (float) the penalty parameter nu for the Wasserstein distance
+    :param epsilon: (float) entropy regularization for the Sinkhorn-like algorithm
+    :param K: (torch.Tensor) shape (n, n) optional precomputed kernel exp(-C / epsilon)
+    :return: (torch.Tensor) shape (n,) smooth adversarial weights
+    """
+    if K is None:
+        K = torch.exp(-C / epsilon)
+    
+    # Log-sum-exp stabilization: shift losses by their maximum value to avoid overflow
+    losses_shifted = losses - torch.max(losses)
+    v = torch.exp(losses_shifted / (shift_cost * epsilon))
+    
+    # Matrix-vector multiplications instead of constructing the NxN plan matrix
+    w = torch.matmul(K.T, v)
+    z = 1.0 / (w + 1e-16)
+    y = torch.matmul(K, z)
+    q = (v * y) / len(losses)
+    return q
+
 def get_smooth_weights(losses, spectrum, smooth_coef, smoothing="l2"):
     """
     Losses are the values of the losses at the current iterate, spectrum are the weights of the spectral measure
@@ -32,6 +91,8 @@ def get_smooth_weights(losses, spectrum, smooth_coef, smoothing="l2"):
         )
     elif smoothing == "neg_entropy":
         primal_sol = neg_entropy_centered_isotonic_regression(sorted_losses, spectrum)
+    elif smoothing == "wasserstein":
+        raise ValueError("Wasserstein penalty should be handled by wasserstein_softmax directly with a cost matrix.")
     else:
         raise NotImplementedError
     inv_perm = torch.argsort(perm)

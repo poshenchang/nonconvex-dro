@@ -7,7 +7,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(sys.path[0])))
 
-from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted
+from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted, get_wasserstein_weights
 
 
 def squared_error_loss(w, X, y):
@@ -64,7 +64,6 @@ def get_grad_batch(name, n_class=None):
     else:
         raise NotImplementedError
 
-
 class Objective:
     def __init__(
         self,
@@ -79,6 +78,7 @@ class Objective:
         shift_cost=1.0,
         penalty=None,
         autodiff=True,
+        distance_metric="euclidean",
     ):
         self.X = X
         self.y = y
@@ -97,14 +97,36 @@ class Objective:
         self.dataset = dataset
 
         self.sigmas = weight_function(self.n)
-        self.shift_cost = self.n * shift_cost if penalty == "l2" else shift_cost
+        self.shift_cost = self.n * shift_cost if penalty in ["l2", "wasserstein"] else shift_cost
         self.penalty = penalty
+        self.distance_metric = distance_metric
+
+        if self.penalty == "wasserstein":
+            if self.distance_metric == "euclidean":
+                self.C = torch.cdist(X.double(), X.double(), p=2.0)
+            elif self.distance_metric == "cosine":
+                X_normalized = F.normalize(X.double(), p=2.0, dim=1)
+                self.C = 1.0 - torch.matmul(X_normalized, X_normalized.T)
+            else:
+                raise ValueError(f"Unknown distance_metric: {self.distance_metric}")
+            self.K = torch.exp(-self.C / 0.1)
+        else:
+            self.C = None
+            self.K = None
 
     def get_batch_loss(self, w, include_reg=True):
         with torch.no_grad():
-            sorted_losses = torch.sort(self.loss(w, self.X, self.y), stable=True)[0]
             n = self.n
-            if self.l2_reg:
+            if self.penalty == "wasserstein":
+                losses = self.loss(w, self.X, self.y)
+                epsilon = 0.1
+                losses_shifted = losses - torch.max(losses)
+                v = torch.exp(losses_shifted / (self.shift_cost * epsilon))
+                w_val = torch.matmul(self.K.T, v)
+                log_sum_exp = torch.log(w_val + 1e-16) + torch.max(losses) / (self.shift_cost * epsilon)
+                risk = (self.shift_cost * epsilon / n) * torch.sum(log_sum_exp + math.log(n))
+            elif self.l2_reg:
+                sorted_losses = torch.sort(self.loss(w, self.X, self.y), stable=True)[0]
                 sm_sigmas = get_smooth_weights_sorted(
                     sorted_losses, self.sigmas, self.shift_cost, self.penalty
                 )
@@ -112,6 +134,7 @@ class Objective:
                     sm_sigmas, sorted_losses
                 ) - 0.5 * self.shift_cost * torch.sum((sm_sigmas - 1 / n) ** 2)
             else:
+                sorted_losses = torch.sort(self.loss(w, self.X, self.y), stable=True)[0]
                 risk = torch.dot(self.sigmas, sorted_losses)
             if self.l2_reg and include_reg:
                 risk += 0.5 * self.l2_reg * torch.norm(w) ** 2 / self.n
@@ -131,14 +154,26 @@ class Objective:
         else:
             X, y = self.X, self.y
             sigmas = self.sigmas
-        sorted_losses, perm = torch.sort(self.loss(w, X, y), stable=True)
-        if self.penalty:
-            q = get_smooth_weights_sorted(
-                sorted_losses, sigmas, self.shift_cost, self.penalty
-            )
+        
+        if self.penalty == "wasserstein":
+            losses = self.loss(w, X, y)
+            if idx is not None:
+                C_sub = self.C[idx][:, idx]
+                K_sub = self.K[idx][:, idx]
+            else:
+                C_sub = self.C
+                K_sub = self.K
+            q = get_wasserstein_weights(losses, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
+            g = torch.matmul(q, self.grad_batch(w, X, y))
         else:
-            q = sigmas
-        g = torch.matmul(q, self.grad_batch(w, X, y)[perm])
+            sorted_losses, perm = torch.sort(self.loss(w, X, y), stable=True)
+            if self.penalty:
+                q = get_smooth_weights_sorted(
+                    sorted_losses, sigmas, self.shift_cost, self.penalty
+                )
+            else:
+                q = sigmas
+            g = torch.matmul(q, self.grad_batch(w, X, y)[perm])
         if self.l2_reg and include_reg:
             g += self.l2_reg * w.detach() / self.n
         return g
@@ -150,15 +185,28 @@ class Objective:
         else:
             X, y = self.X, self.y
             sigmas = self.sigmas
-        sorted_losses = torch.sort(self.loss(w, X, y), stable=True)[0]
-        if self.l2_reg:
+        
+        if self.penalty == "wasserstein":
+            losses = self.loss(w, X, y)
+            if idx is not None:
+                C_sub = self.C[idx][:, idx]
+                K_sub = self.K[idx][:, idx]
+            else:
+                C_sub = self.C
+                K_sub = self.K
             with torch.no_grad():
-                sm_sigmas = get_smooth_weights_sorted(
-                    sorted_losses, sigmas, self.shift_cost, self.penalty
-                )
-            risk = torch.dot(sm_sigmas, sorted_losses)
+                sm_sigmas = get_wasserstein_weights(losses, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
+            risk = torch.dot(sm_sigmas, losses)
         else:
-            risk = torch.dot(sigmas, sorted_losses)
+            sorted_losses = torch.sort(self.loss(w, X, y), stable=True)[0]
+            if self.l2_reg:
+                with torch.no_grad():
+                    sm_sigmas = get_smooth_weights_sorted(
+                        sorted_losses, sigmas, self.shift_cost, self.penalty
+                    )
+                risk = torch.dot(sm_sigmas, sorted_losses)
+            else:
+                risk = torch.dot(sigmas, sorted_losses)
         g = torch.autograd.grad(outputs=risk, inputs=w)[0]
         if self.l2_reg and include_reg:
             g += self.l2_reg * w.detach() / self.n

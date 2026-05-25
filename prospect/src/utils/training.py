@@ -70,7 +70,7 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
     )
 
     lrd = 0.5 if "lrd" not in optim_cfg.keys() else optim_cfg["lrd"]
-    penalty = "l2"
+    penalty = optim_cfg.get("penalty", "l2")
 
     if name == "sgd":
         return StochasticSubgradientMethod(
@@ -134,6 +134,8 @@ def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
         model_cfg["n_class"],
         model_cfg["shift_cost"],
     )
+    penalty = model_cfg.get("penalty", "l2")
+    distance_metric = model_cfg.get("distance_metric", "euclidean")
     if name == "erm":
         weight_function = lambda n: get_erm_weights(n)
     elif name == "extremile":
@@ -165,8 +167,9 @@ def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
         risk_name=name,
         dataset=dataset,
         shift_cost=shift_cost,
-        penalty="l2",
+        penalty=penalty,
         autodiff=autodiff,
+        distance_metric=distance_metric,
     )
 
 
