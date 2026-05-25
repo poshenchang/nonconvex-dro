@@ -80,8 +80,28 @@ parser.add_argument(
     type=int,
     default=0,
 )
-parser.add_argument("--parallel", type=int, default=1)
-parser.add_argument("--n_jobs", type=int, default=-2)
+parser.add_argument(
+    "--parallel",
+    type=int,
+    default=1,
+)
+parser.add_argument(
+    "--n_jobs",
+    type=int,
+    default=-2,
+)
+parser.add_argument(
+    "--penalty",
+    type=str,
+    default="l2",
+    choices=["l2", "neg_entropy", "wasserstein"],
+)
+parser.add_argument(
+    "--distance_metric",
+    type=str,
+    default="euclidean",
+    choices=["euclidean", "cosine"],
+)
 args = parser.parse_args()
 
 # Configure for input to trainers.
@@ -97,13 +117,16 @@ elif dataset == "amazon":
     n_class = 5
 elif dataset == "diabetes":
     loss = "binary_cross_entropy"
+    n_class = None
 
 model_cfg = {
     "objective": args.objective,
     "l2_reg": L2_REG,
     "shift_cost": SHIFT_COST,
     "loss": loss,
-    "n_class": n_class
+    "n_class": n_class,
+    "penalty": args.penalty,
+    "distance_metric": args.distance_metric,
 }
 
 if args.use_hyperparam:
@@ -115,6 +138,8 @@ optim_cfg = {
     "lr": lrs,
     "epoch_len": args.epoch_len,
     "shift_cost": SHIFT_COST,
+    "penalty": args.penalty,
+    "distance_metric": args.distance_metric,
 }
 seeds = [1, 2]
 n_epochs = args.n_epochs

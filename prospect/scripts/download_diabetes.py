@@ -8,7 +8,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 # Download raw data.
-data_path = "../data/"
+data_path = "data/"
+os.makedirs(os.path.join(data_path, "UCI"), exist_ok=True)
 url = "https://github.com/fairlearn/talks/raw/main/2021_scipy_tutorial/data/diabetic_data.csv"
 print(f"Downloading raw data from '{url}'...")
 urllib.request.urlretrieve(url, os.path.join(data_path, "UCI", "diabetic_data.csv"))
@@ -25,24 +26,24 @@ df.loc[:, "readmit_30_days"] = df["readmitted"] == "<30"
 df.loc[:, "readmit_binary"] = df["readmitted"] != "NO"
 # Replace missing values and re-code categories
 df.loc[:, "age"] = df.age.replace({"?": ""})
-df.loc[:, "payer_code"] = df["payer_code"].replace({"?", "Unknown"})
+df.loc[:, "payer_code"] = df["payer_code"].replace({"?": "Unknown"})
 df.loc[:, "medical_specialty"] = df["medical_specialty"].replace({"?": "Missing"})
 df.loc[:, "race"] = df["race"].replace({"?": "Unknown"})
 
-df.loc[:, "admission_source_id"] = df["admission_source_id"].replace(
+df["admission_source_id"] = df["admission_source_id"].astype(object).replace(
     {1: "Referral", 2: "Referral", 3: "Referral", 7: "Emergency"}
 )
-df.loc[:, "age"] = df["age"].replace(
+df["age"] = df["age"].replace(
     ["[0-10)", "[10-20)", "[20-30)"], "30 years or younger"
 )
-df.loc[:, "age"] = df["age"].replace(["[30-40)", "[40-50)", "[50-60)"], "30-60 years")
-df.loc[:, "age"] = df["age"].replace(["[60-70)", "[70-80)", "[80-90)"], "Over 60 years")
+df["age"] = df["age"].replace(["[30-40)", "[40-50)", "[50-60)"], "30-60 years")
+df["age"] = df["age"].replace(["[60-70)", "[70-80)", "[80-90)"], "Over 60 years")
 
 # Clean various medical codes
-df.loc[:, "discharge_disposition_id"] = df.discharge_disposition_id.apply(
+df["discharge_disposition_id"] = df.discharge_disposition_id.astype(object).apply(
     lambda x: "Discharged to Home" if x == 1 else "Other"
 )
-df.loc[:, "admission_source_id"] = df["admission_source_id"].apply(
+df["admission_source_id"] = df["admission_source_id"].apply(
     lambda x: x if x in ["Emergency", "Referral"] else "Other"
 )
 # Re-code Medical Specialties and Primary Diagnosis
@@ -54,11 +55,11 @@ specialties = [
     "Cardiology",
     "Surgery",
 ]
-df.loc[:, "medical_specialty"] = df["medical_specialty"].apply(
+df["medical_specialty"] = df["medical_specialty"].apply(
     lambda x: x if x in specialties else "Other"
 )
 #
-df.loc[:, "primary_diagnosis"] = df["primary_diagnosis"].replace(
+df["primary_diagnosis"] = df["primary_diagnosis"].replace(
     regex={
         "[7][1-3][0-9]": "Musculoskeltal Issues",
         "250.*": "Diabetes",
@@ -72,17 +73,17 @@ diagnoses = [
     "Genitourinary Issues",
     "Musculoskeltal Issues",
 ]
-df.loc[:, "primary_diagnosis"] = df["primary_diagnosis"].apply(
+df["primary_diagnosis"] = df["primary_diagnosis"].apply(
     lambda x: x if x in diagnoses else "Other"
 )
 
 # Binarize and bin features
-df.loc[:, "medicare"] = df.payer_code == "MC"
-df.loc[:, "medicaid"] = df.payer_code == "MD"
+df["medicare"] = df.payer_code == "MC"
+df["medicaid"] = df.payer_code == "MD"
 
-df.loc[:, "had_emergency"] = df["number_emergency"] > 0
-df.loc[:, "had_inpatient_days"] = df["number_inpatient"] > 0
-df.loc[:, "had_outpatient_days"] = df["number_outpatient"] > 0
+df["had_emergency"] = df["number_emergency"] > 0
+df["had_inpatient_days"] = df["number_inpatient"] > 0
+df["had_outpatient_days"] = df["number_outpatient"] > 0
 
 # Save DataFrame
 cols_to_keep = [
