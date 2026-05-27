@@ -90,7 +90,11 @@ def get_smooth_weights(losses, spectrum, smooth_coef, smoothing="l2"):
             sorted_losses.numpy(), spectrum.numpy()
         )
     elif smoothing == "neg_entropy":
-        primal_sol = neg_entropy_centered_isotonic_regression(sorted_losses, spectrum)
+        primal_sol = torch.tensor(
+            neg_entropy_centered_isotonic_regression(
+                sorted_losses.numpy(), spectrum.numpy()
+            )
+        )
     elif smoothing == "wasserstein":
         raise ValueError("Wasserstein penalty should be handled by wasserstein_softmax directly with a cost matrix.")
     else:
@@ -180,11 +184,11 @@ def l2_centered_isotonic_regression(losses, spectrum):
     return sol
 
 
-# @jit
+@jit(nopython=True)
 def neg_entropy_centered_isotonic_regression(losses, spectrum):
     n = len(losses)
-    logn = torch.log(torch.tensor(n))
-    log_spectrum = torch.log(spectrum)
+    logn = np.log(n)
+    log_spectrum = np.log(spectrum)
 
     lse_losses = [losses[0]]
     lse_log_spectrum = [log_spectrum[0]]
@@ -196,23 +200,19 @@ def neg_entropy_centered_isotonic_regression(losses, spectrum):
         lse_log_spectrum.append(log_spectrum[i])
         end_points.append(i)
         while len(means) > 1 and means[-2] >= means[-1]:
-            prev_mean, prev_lse_loss, prev_lse_log_spectrum, prev_end_point = (
-                means.pop(),
-                lse_losses.pop(),
-                lse_log_spectrum.pop(),
-                end_points.pop(),
-            )
-            new_lse_loss = torch.logsumexp(
-                torch.tensor([lse_losses[-1], prev_lse_loss]), dim=0
-            )
-            new_lse_log_spectrum = torch.logsumexp(
-                torch.tensor([lse_log_spectrum[-1], prev_lse_log_spectrum]), dim=0
-            )
+            prev_mean = means.pop()
+            prev_lse_loss = lse_losses.pop()
+            prev_lse_log_spectrum = lse_log_spectrum.pop()
+            prev_end_point = end_points.pop()
+            
+            new_lse_loss = np.logaddexp(lse_losses[-1], prev_lse_loss)
+            new_lse_log_spectrum = np.logaddexp(lse_log_spectrum[-1], prev_lse_log_spectrum)
+            
             means[-1] = new_lse_loss - new_lse_log_spectrum - logn
-            lse_losses[-1], lse_log_spectrum[-1] = new_lse_loss, new_lse_log_spectrum
+            lse_losses[-1] = new_lse_loss
+            lse_log_spectrum[-1] = new_lse_log_spectrum
             end_points[-1] = prev_end_point
 
-    # Expand function so numba understands.
     sol = np.zeros((n,))
     i = 0
     for j in range(len(end_points)):
