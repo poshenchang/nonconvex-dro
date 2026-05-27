@@ -55,6 +55,18 @@ parser.add_argument(
         "esrm_hard",
     ],
 )
+parser.add_argument(
+    "--penalty",
+    type=str,
+    default="l2",
+    choices=["l2", "neg_entropy", "wasserstein"],
+)
+parser.add_argument(
+    "--distance_metric",
+    type=str,
+    default="euclidean",
+    choices=["euclidean", "cosine"],
+)
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -69,13 +81,16 @@ elif dataset == "amazon":
     n_class = 5
 elif dataset == "diabetes":
     loss = "binary_cross_entropy"
+    n_class = None
 
 model_cfg = {
     "objective": args.objective,
     "l2_reg": L2_REG,
     "shift_cost": SHIFT_COST,
     "loss": loss,
-    "n_class": n_class
+    "n_class": n_class,
+    "penalty": args.penalty,
+    "distance_metric": args.distance_metric,
 }
 
 X_train, y_train, X_val, y_val = load_dataset(dataset)
