@@ -26,20 +26,23 @@ class SubgradientMethod(Optimizer):
         self.objective = objective
         self.lr = lr
 
-        num_params = getattr(
-            objective,
-            "num_parameters",
-            objective.n_class * objective.d if objective.n_class else objective.d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * self.objective.d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
 
     def start_epoch(self):
         pass
 
     def step(self):
         g = self.objective.get_batch_subgrad(self.weights)
-        self.weights = self.weights.detach() - self.lr * g
-        self.weights.requires_grad_(True)
+        self.weights = self.weights - self.lr * g
 
     def end_epoch(self):
         pass
@@ -55,12 +58,16 @@ class StochasticSubgradientMethod(Optimizer):
         self.lr = lr
         self.batch_size = batch_size
 
-        num_params = getattr(
-            objective,
-            "num_parameters",
-            objective.n_class * objective.d if objective.n_class else objective.d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * self.objective.d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
         self.order = None
         self.iter = None
         torch.manual_seed(seed)
@@ -79,10 +86,10 @@ class StochasticSubgradientMethod(Optimizer):
             self.iter
             * self.batch_size : min(self.objective.n, (self.iter + 1) * self.batch_size)
         ]
-        self.weights.requires_grad_(True)
+        self.weights.requires_grad = True
         g = self.objective.get_batch_subgrad(self.weights, idx=idx)
-        self.weights = self.weights.detach() - self.lr * g
-        self.weights.requires_grad_(True)
+        self.weights.requires_grad = False
+        self.weights = self.weights - self.lr * g
         self.iter += 1
 
     def end_epoch(self):
@@ -102,13 +109,20 @@ class StochasticRegularizedDualAveraging(Optimizer):
         self.l2_reg = l2_reg
         self.batch_size = batch_size
 
-        num_params = getattr(
-            objective,
-            "num_parameters",
-            objective.n_class * objective.d if objective.n_class else objective.d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
-        self.dual_avg = torch.zeros(num_params, dtype=torch.float64)
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * self.objective.d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+            self.dual_avg = torch.zeros(
+                objective.n_class * self.objective.d, dtype=torch.float64
+            )
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
+            self.dual_avg = torch.zeros(self.objective.d, dtype=torch.float64)
 
         self.order = None
         self.epoch_iter = None
@@ -136,7 +150,7 @@ class StochasticRegularizedDualAveraging(Optimizer):
         self.weights = -self.dual_avg / (
             self.l2_reg / self.objective.n + self.aux_reg / (self.total_iter + 1)
         )
-        self.weights = self.weights.detach().requires_grad_(True)
+        self.weights.requires_grad = True
         self.epoch_iter += 1
         self.total_iter += 1
 
@@ -163,12 +177,14 @@ class SmoothedLSVRG(Optimizer):
         n, d = objective.n, objective.d
         self.objective = objective
         self.lr = lr
-        num_params = getattr(
-            objective,
-            "num_parameters",
-            objective.n_class * d if objective.n_class else d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+        else:
+            self.weights = torch.zeros(d, requires_grad=True, dtype=torch.float64)
         self.spectrum = self.objective.sigmas
         self.rng = np.random.RandomState(seed)
         self.uniform = uniform
@@ -184,20 +200,20 @@ class SmoothedLSVRG(Optimizer):
     def start_epoch(self):
         pass
 
+    @torch.no_grad()
     def step(self):
         n = self.objective.n
 
         # start epoch
         if self.step_no % n == 0:
-            with torch.no_grad():
-                losses = self.objective.get_indiv_loss(self.weights, with_grad=False)
-                sorted_losses, self.argsort = torch.sort(losses, stable=True)
-                self.sigmas = get_smooth_weights_sorted(
-                    sorted_losses, self.spectrum, self.smooth_coef, self.smoothing
-                )
+            losses = self.objective.get_indiv_loss(self.weights, with_grad=False)
+            sorted_losses, self.argsort = torch.sort(losses, stable=True)
+            self.sigmas = get_smooth_weights_sorted(
+                sorted_losses, self.spectrum, self.smooth_coef, self.smoothing
+            )
             with torch.enable_grad():
                 self.subgrad_checkpt = self.objective.get_batch_subgrad(self.weights, include_reg=False)
-            self.weights_checkpt = self.weights.detach().clone()
+            self.weights_checkpt = torch.clone(self.weights)
             self.nb_checkpoints += 1
 
         if self.uniform:
@@ -207,7 +223,7 @@ class SmoothedLSVRG(Optimizer):
         x = self.objective.X[self.argsort[i]]
         y = self.objective.y[self.argsort[i]]
 
-        # get_indiv_grad handles enable_grad internally for MLP
+        # Compute gradient at current iterate.
         g = self.objective.get_indiv_grad(self.weights, x, y).squeeze()
         g_checkpt = self.objective.get_indiv_grad(self.weights_checkpt, x, y).squeeze()
 
@@ -216,9 +232,9 @@ class SmoothedLSVRG(Optimizer):
         else:
             direction = g - g_checkpt + self.subgrad_checkpt
         if self.objective.l2_reg:
-            direction = direction + self.objective.l2_reg * self.weights.detach() / n
+            direction += self.objective.l2_reg * self.weights / n
 
-        self.weights = (self.weights.detach() - self.lr * direction).requires_grad_(True)
+        self.weights.copy_(self.weights - self.lr * direction)
         self.step_no += 1
 
     def end_epoch(self):
@@ -250,14 +266,18 @@ class SaddleSAGA(Optimizer):
         if scale_lrd:
             self.lrd = self.lrd / self.objective.n
         n, d = self.objective.n, self.objective.d
-
-        num_params = getattr(
-            objective,
-            "num_parameters",
-            objective.n_class * d if objective.n_class else d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
-        self.grad_table = torch.zeros(n, num_params, dtype=torch.float64)
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+            self.grad_table = torch.zeros(n, objective.n_class * d, dtype=torch.float64)
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
+            self.grad_table = torch.zeros(n, d, dtype=torch.float64)
         self.sigmas = self.objective.sigmas
         self.rng_grad = np.random.RandomState(seed_grad)
         self.rng_table = np.random.RandomState(seed_table)
@@ -280,7 +300,6 @@ class SaddleSAGA(Optimizer):
         #         ]
         self.grad_table = self.objective.get_indiv_grad(self.weights)
         self.running_subgrad = torch.matmul(self.grad_table.T, self.rho)
-        self.center = torch.ones(n, dtype=torch.float64) / n  # cached; avoids O(n) alloc per step
 
         if epoch_len:
             self.epoch_len = epoch_len
@@ -297,47 +316,42 @@ class SaddleSAGA(Optimizer):
         i = torch.tensor([self.rng_grad.randint(0, n)])
         x = self.objective.X[i]
         y = self.objective.y[i]
+        # loss = self.objective.loss(self.weights, x, y)
+        # g = torch.autograd.grad(outputs=loss, inputs=self.weights)[0]
         loss = self.objective.loss(self.weights, x, y)
-        loss_val = loss.item()  # plain scalar; dual update needs value only, not graph
-        g = self.objective.get_indiv_grad(self.weights, x, y).squeeze().detach()
+        g = self.objective.get_indiv_grad(self.weights, x, y).squeeze()
 
-        with torch.no_grad():
-            # Compute variance-reduced direction from table.
-            g_old = self.grad_table[i].reshape(-1)
-            v = n * self.lam[i] * g - n * self.rho[i] * g_old + self.running_subgrad
+        # Compute gradient at from table.
+        g_old = self.grad_table[i].reshape(-1)
+        v = n * self.lam[i] * g - n * self.rho[i] * g_old + self.running_subgrad
 
-            # Update iterate: prox step for linear; plain gradient step for MLP.
-            if getattr(self.objective, "autodiff", False):
-                new_weights = self.weights.detach() - self.lrp * v
-            else:
-                new_weights = (
-                    1
-                    / (self.lrp * self.objective.l2_reg / n + 1)
-                    * (self.weights.detach() - self.lrp * v)
-                )
+        # Update iterate.
+        self.weights = (
+            1
+            / (self.lrp * self.objective.l2_reg / n + 1)
+            * (self.weights - self.lrp * v)
+        )
 
-            # Dual update: avoid allocating a full (n,) one-hot tensor each step.
-            # eta = losses everywhere, except eta[i] shifts by n*(loss_val - losses[i]).
-            delta = n * (loss_val - self.losses[i].item())
-            eta = self.losses.clone()
-            eta[i] = eta[i] + delta
-            cur_lam = self.lam[i].clone()
+        # update dual weights
+        e = torch.zeros((n,), dtype=torch.float64)
+        e[i] = 1
+        eta = n * loss * e - n * self.losses[i] * e + self.losses
+        center = torch.ones((n,), dtype=torch.float64) / n
+        cur_lam = self.lam[i]
 
-            self.lam = get_smooth_weights(
-                (self.lam + self.lrd * eta - self.center).detach(),
-                self.sigmas,
-                1 + self.lrd * self.sm_coef,
-                smoothing="l2",
-            )
+        self.lam = get_smooth_weights(
+            (self.lam + self.lrd * eta - center).detach(),
+            self.sigmas,
+            1 + self.lrd * self.sm_coef,
+            smoothing="l2",
+        )
 
-            # Update tables in-place.
-            self.losses[i] = loss_val
-            self.grad_table[i] = g.reshape(1, -1)
-            rho_old = self.rho[i].clone()
-            self.rho[i] = cur_lam
-            self.running_subgrad.add_(cur_lam * g - rho_old * g_old)
-
-        self.weights = new_weights.requires_grad_(True)
+        # update table
+        self.losses[i] = loss.item()
+        self.grad_table[i] = g.reshape(1, -1)
+        rho_old = self.rho[i]
+        self.rho[i] = cur_lam
+        self.running_subgrad += cur_lam * g - rho_old * g_old
 
     def end_epoch(self):
         pass

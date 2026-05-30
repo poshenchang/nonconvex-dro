@@ -246,14 +246,14 @@ class Objective:
             sigmas = self.sigmas
 
         if self.penalty == "wasserstein":
-            losses = self.loss(w, X, y)
+            losses = self.loss(w, X, y).double()
             C_sub = self.C[idx][:, idx] if idx is not None else self.C
             K_sub = self.K[idx][:, idx] if idx is not None else self.K
             with torch.no_grad():
                 sm_sigmas = get_wasserstein_weights(losses, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
             risk = torch.dot(sm_sigmas, losses)
         else:
-            sorted_losses = torch.sort(self.loss(w, X, y), stable=True)[0]
+            sorted_losses = torch.sort(self.loss(w, X, y).double(), stable=True)[0]
             if self.l2_reg:
                 with torch.no_grad():
                     sm_sigmas = get_smooth_weights_sorted(sorted_losses, sigmas, self.shift_cost, self.penalty)

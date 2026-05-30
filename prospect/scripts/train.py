@@ -2,11 +2,13 @@
 Train model for a particular objective and optimizer on evry hyperparameter setting.
 """
 
+import gc
 import time
 import datetime
 from joblib import Parallel, delayed
 import sys
 import argparse
+import torch
 
 L2_REG = 1.0
 SHIFT_COST = 1.0
@@ -179,8 +181,14 @@ def worker(optim):
         )
         if code == FAIL_CODE:
             diverged = True
+        # Free memory between seeds (GPU cache + Python objects).
+        torch.cuda.empty_cache()
+        gc.collect()
     if diverged:
         print(f"Optimizer '{name}' diverged at learning rate {lr}!")
+    # Free memory between LR configs when running sequentially.
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
 tic = time.time()
