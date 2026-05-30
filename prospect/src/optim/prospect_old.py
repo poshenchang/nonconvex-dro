@@ -5,7 +5,6 @@ from src.optim.baselines import Optimizer
 from numba import jit
 import warnings
 
-
 class Prospect(Optimizer):
     def __init__(
         self,
@@ -23,20 +22,19 @@ class Prospect(Optimizer):
         self.objective = objective
         self.lrp = lrp
         self.lrd = 1.0 if lrd is None else lrd
-        n = self.objective.n
-
-        # ------------------------------------------------------------------
-        # Use num_parameters from Objective (handles MLP and linear models).
-        # Falls back to d or n_class*d for backwards compatibility.
-        # ------------------------------------------------------------------
-        num_params = getattr(
-            self.objective,
-            "num_parameters",
-            objective.n_class * objective.d if objective.n_class else objective.d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
-        self.grad_table = torch.zeros(n, num_params, dtype=torch.float64)
-
+        n, d = self.objective.n, self.objective.d
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+            self.grad_table = torch.zeros(n, objective.n_class * d, dtype=torch.float64)
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
+            self.grad_table = torch.zeros(n, d, dtype=torch.float64)
         self.sigmas = self.objective.sigmas
         self.rng_grad = np.random.RandomState(seed_grad)
         self.rng_table = np.random.RandomState(seed_table)
@@ -45,7 +43,7 @@ class Prospect(Optimizer):
         assert oracle_reg in ["prox", "grad"]
         self.oracle_reg = oracle_reg
 
-        # Precompute Wasserstein cost / kernel if needed
+        # Precompute cost matrix for Wasserstein if needed
         if self.penalty == "wasserstein":
             self.C = getattr(self.objective, "C", None)
             if self.C is None:
@@ -58,12 +56,10 @@ class Prospect(Optimizer):
             self.C = None
             self.K = None
 
-        # Build initial loss / dual-weight / gradient tables
+        # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights).detach()
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(
-                self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K
-            )
+            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -72,17 +68,15 @@ class Prospect(Optimizer):
         real_l2_reg = self.objective.l2_reg / n
 
         if self.oracle_reg == "grad":
-            # Include L2 reg in the stored gradient for gradient-mapping oracle
-            self.grad_table = (
-                self.objective.get_indiv_grad(self.weights)
-                + real_l2_reg * self.weights[None, :]
-            )
+            self.grad_table = self.objective.get_indiv_grad(self.weights) + real_l2_reg * self.weights[None, :]
         else:
             self.grad_table = self.objective.get_indiv_grad(self.weights)
-
         self.running_subgrad = torch.matmul(self.grad_table.T, self.rho)
 
-        self.epoch_len = epoch_len if epoch_len else self.objective.n
+        if epoch_len:
+            self.epoch_len = epoch_len
+        else:
+            self.epoch_len = self.objective.n
 
     def start_epoch(self):
         pass
@@ -92,22 +86,21 @@ class Prospect(Optimizer):
         n = self.objective.n
         real_l2_reg = self.objective.l2_reg / n
 
-        # Sample a random index and compute current gradient
+        # Compute gradient at current iterate.
         i = torch.tensor([self.rng_grad.randint(0, n)])
         x = self.objective.X[i]
         y = self.objective.y[i]
         loss = self.objective.loss(self.weights, x, y)
         g = self.objective.get_indiv_grad(self.weights, x, y).squeeze()
         if self.oracle_reg == "grad":
-            g = g + real_l2_reg * self.weights
+            g += real_l2_reg * self.weights
 
-        # Retrieve stale gradient from table
+        # Compute gradient at from table.
         g_old = self.grad_table[i].reshape(-1)
 
-        # SVRG-style variance-reduced direction
         v = n * self.lam[i] * g - n * self.rho[i] * g_old + self.running_subgrad
 
-        # Primal update: proximal (linear) or gradient step (MLP / non-convex)
+        # Update iterate.
         if self.oracle_reg == "prox":
             self.weights.copy_(
                 1 / (self.lrp * real_l2_reg + 1) * (self.weights - self.lrp * v)
@@ -115,12 +108,11 @@ class Prospect(Optimizer):
         else:
             self.weights.copy_(self.weights - self.lrp * v)
 
-        # Update loss and dual weights
-        self.losses[i] = loss.detach().double()  # cast to float64 to match loss table dtype
+        # update dual weights
+        # self.losses[i] = self.lrd*loss + (1-self.lrd)*self.losses[i]
+        self.losses[i] = loss.detach()
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(
-                self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K
-            )
+            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -129,7 +121,7 @@ class Prospect(Optimizer):
         rho_old = self.rho[i]
         self.rho[i] = cur_lam
 
-        # Update gradient table and running subgradient
+        # update table
         self.grad_table[i] = g[None, :]
         self.running_subgrad += cur_lam * g - rho_old * g_old
 
@@ -150,31 +142,32 @@ class ProspectMoreau(Optimizer):
         epoch_len=None,
         shift_cost=1.0,
         penalty="l2",
-        device="cpu",
     ):
         super(ProspectMoreau, self).__init__()
         self.objective = objective
         self.lr = lr
-        n = self.objective.n
-
-        if not self.objective.autodiff:
+        n, d = self.objective.n, self.objective.d
+        if self.objective.autodiff == False:
             warnings.warn("ProspectMoreau does not currently have a non-autodiff implementation")
-
-        # Use num_parameters to support MLP weight vectors
-        num_params = getattr(
-            self.objective,
-            "num_parameters",
-            objective.n_class * objective.d if objective.n_class else objective.d,
-        )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
-        self.grad_table = torch.zeros(n, num_params, dtype=torch.float64)
-
+        if objective.n_class:
+            self.weights = torch.zeros(
+                objective.n_class * d,
+                requires_grad=True,
+                dtype=torch.float64,
+            )
+            self.grad_table = torch.zeros(n, objective.n_class * d, dtype=torch.float64)
+        else:
+            self.weights = torch.zeros(
+                self.objective.d, requires_grad=True, dtype=torch.float64
+            )
+            self.grad_table = torch.zeros(n, d, dtype=torch.float64)
         self.sigmas = self.objective.sigmas
         self.rng_grad = np.random.RandomState(seed_grad)
         self.rng_table = np.random.RandomState(seed_table)
         self.shift_cost = n * shift_cost
         self.penalty = penalty
 
+        # Precompute cost matrix for Wasserstein if needed
         if self.penalty == "wasserstein":
             self.C = getattr(self.objective, "C", None)
             if self.C is None:
@@ -187,11 +180,10 @@ class ProspectMoreau(Optimizer):
             self.C = None
             self.K = None
 
+        # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights)
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(
-                self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K
-            )
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -206,9 +198,16 @@ class ProspectMoreau(Optimizer):
                 + self.objective.l2_reg * self.weights / n
             )
 
-        self.running_subgrad = torch.matmul(self.grad_table.T, self.lam).cpu()
+        self.grad_table = self.grad_table
 
-        self.epoch_len = epoch_len if epoch_len else self.objective.n
+        self.running_subgrad = torch.matmul(
+            self.grad_table.T, self.lam
+        ).cpu()
+
+        if epoch_len:
+            self.epoch_len = epoch_len
+        else:
+            self.epoch_len = self.objective.n
 
     def start_epoch(self):
         pass
@@ -234,17 +233,17 @@ class ProspectMoreau(Optimizer):
         mor_grad_j = self.objective.get_indiv_mor_grad(v_table, self.lr, j)
         self.grad_table[j] = mor_grad_j.reshape(1, -1)
 
-        self.losses[j] = loss_j.detach().double()  # cast to float64 to match loss table dtype
+        self.losses[j] = loss_j
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(
-                self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K
-            )
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses.detach(), self.sigmas, self.shift_cost, self.penalty
             )
 
-        self.running_subgrad = torch.matmul(self.lam, self.grad_table).cpu()
+        self.running_subgrad = torch.matmul(
+            self.lam, self.grad_table
+        ).cpu()
 
     def end_epoch(self):
         pass
@@ -253,24 +252,36 @@ class ProspectMoreau(Optimizer):
         return self.epoch_len
 
 
-# ---------------------------------------------------------------------------
-# Numba-accelerated bubble sort for maintaining sorted loss tables
-# ---------------------------------------------------------------------------
-
 @jit(nopython=True)
 def bubble_sort(idx, sort, argsort):
     n = len(sort)
 
-    # Bubble left
+    # Bubble left.
     j = idx
     while j > 0 and sort[j] < sort[j - 1] - 1e-10:
-        sort[j], sort[j - 1] = sort[j - 1], sort[j]
-        argsort[j], argsort[j - 1] = argsort[j - 1], argsort[j]
+        # Swap elements in sorted vector.
+        temp = sort[j]
+        sort[j] = sort[j - 1]
+        sort[j - 1] = temp
+
+        # Swap elements in "argsort" vector.
+        temp = argsort[j]
+        argsort[j] = argsort[j - 1]
+        argsort[j - 1] = temp
+
         j -= 1
 
-    # Bubble right
+    # Bubble right.
     j = idx
     while j < n - 1 and sort[j] > sort[j + 1] + 1e-10:
-        sort[j], sort[j + 1] = sort[j + 1], sort[j]
-        argsort[j], argsort[j + 1] = argsort[j + 1], argsort[j]
+        # Swap elements in sorted vector.
+        temp = sort[j]
+        sort[j] = sort[j + 1]
+        sort[j + 1] = temp
+
+        # Swap elements in "argsort" vector.
+        temp = argsort[j]
+        argsort[j] = argsort[j + 1]
+        argsort[j + 1] = temp
+
         j += 1

@@ -116,7 +116,7 @@ elif dataset == "amazon":
     loss = "multinomial_cross_entropy"
     n_class = 5
 elif dataset == "diabetes":
-    loss = "binary_cross_entropy"
+    loss = "mlp_binary_cross_entropy" # loss = "binary_cross_entropy"
     n_class = None
 
 model_cfg = {

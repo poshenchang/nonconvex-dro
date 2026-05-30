@@ -26,17 +26,8 @@ from src.utils.data import load_dataset
 SUCCESS_CODE = 0
 FAIL_CODE = -1
 
-# Losses that require gradient-mapping oracle (no closed-form prox)
-_GRAD_ORACLE_LOSSES = {"mlp_binary_cross_entropy"}
-
-
 class OptimizationError(RuntimeError):
     pass
-
-
-# ---------------------------------------------------------------------------
-# Training loop
-# ---------------------------------------------------------------------------
 
 def train_model(optimizer, val_objective, n_epochs, save_iters=False):
     epoch_len = optimizer.get_epoch_len()
@@ -54,10 +45,11 @@ def train_model(optimizer, val_objective, n_epochs, save_iters=False):
         if save_iters:
             iterates.append(optimizer.weights.clone())
 
+        # Logging.
         metrics.append(compute_metrics(epoch, optimizer, val_objective, toc - tic))
         if metrics[-1]["train_loss"] >= 1.5 * init_loss:
             raise OptimizationError(
-                f"Train loss 50 % greater than initial loss! (epoch {epoch})"
+                f"train loss 50% greater than inital loss! (epoch {epoch})"
             )
 
     result = {
@@ -69,17 +61,16 @@ def train_model(optimizer, val_objective, n_epochs, save_iters=False):
     return result
 
 
-# ---------------------------------------------------------------------------
-# Optimizer factory
-# ---------------------------------------------------------------------------
-
 def get_optimizer(optim_cfg, objective, seed, device="cpu"):
-    name       = optim_cfg["optimizer"]
-    lr         = optim_cfg["lr"]
-    epoch_len  = optim_cfg["epoch_len"]
-    shift_cost = optim_cfg["shift_cost"]
-    lrd        = optim_cfg.get("lrd", 0.5)
-    penalty    = optim_cfg.get("penalty", "l2")
+    name, lr, epoch_len, shift_cost = (
+        optim_cfg["optimizer"],
+        optim_cfg["lr"],
+        optim_cfg["epoch_len"],
+        optim_cfg["shift_cost"],
+    )
+
+    lrd = 0.5 if "lrd" not in optim_cfg.keys() else optim_cfg["lrd"]
+    penalty = optim_cfg.get("penalty", "l2")
 
     if name == "sgd":
         return StochasticSubgradientMethod(
@@ -99,6 +90,7 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
             length_epoch=epoch_len,
         )
     elif name == "saddlesaga":
+        # best lr for V1.
         return SaddleSAGA(
             objective,
             lrp=lr,
@@ -110,8 +102,6 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
             epoch_len=epoch_len,
         )
     elif name == "prospect":
-        # Auto-select oracle: gradient mapping for non-linear losses, prox otherwise
-        oracle = "grad" if objective.loss_name in _GRAD_ORACLE_LOSSES else "prox"
         return Prospect(
             objective,
             lrp=lr,
@@ -120,7 +110,6 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
             penalty=penalty,
             seed_grad=seed,
             seed_table=3 * seed,
-            oracle_reg=oracle,
         )
     elif name == "moreau":
         return ProspectMoreau(
@@ -134,37 +123,39 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
             device=device,
         )
     else:
-        raise ValueError(f"Unrecognized optimizer: '{name}'")
+        raise ValueError("Unreocgnized optimizer!")
 
-
-# ---------------------------------------------------------------------------
-# Objective factory
-# ---------------------------------------------------------------------------
 
 def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
-    name            = model_cfg["objective"]
-    l2_reg          = model_cfg["l2_reg"]
-    loss            = model_cfg["loss"]
-    n_class         = model_cfg["n_class"]
-    shift_cost      = model_cfg["shift_cost"]
-    penalty         = model_cfg.get("penalty", "l2")
+    name, l2_reg, loss, n_class, shift_cost = (
+        model_cfg["objective"],
+        model_cfg["l2_reg"],
+        model_cfg["loss"],
+        model_cfg["n_class"],
+        model_cfg["shift_cost"],
+    )
+    penalty = model_cfg.get("penalty", "l2")
     distance_metric = model_cfg.get("distance_metric", "euclidean")
-
-    _weight_fns = {
-        "erm":               lambda n: get_erm_weights(n),
-        "extremile":         lambda n: get_extremile_weights(n, 2.0),
-        "superquantile":     lambda n: get_superquantile_weights(n, 0.5),
-        "esrm":              lambda n: get_esrm_weights(n, 1.0),
-        "extremile_lite":    lambda n: get_extremile_weights(n, 1.5),
-        "superquantile_lite":lambda n: get_superquantile_weights(n, 0.25),
-        "esrm_lite":         lambda n: get_esrm_weights(n, 0.5),
-        "extremile_hard":    lambda n: get_extremile_weights(n, 2.5),
-        "superquantile_hard":lambda n: get_superquantile_weights(n, 0.75),
-        "esrm_hard":         lambda n: get_esrm_weights(n, 2.0),
-    }
-    if name not in _weight_fns:
-        raise ValueError(f"Unrecognized objective: '{name}'")
-    weight_function = _weight_fns[name]
+    if name == "erm":
+        weight_function = lambda n: get_erm_weights(n)
+    elif name == "extremile":
+        weight_function = lambda n: get_extremile_weights(n, 2.0)
+    elif name == "superquantile":
+        weight_function = lambda n: get_superquantile_weights(n, 0.5)
+    elif name == "esrm":
+        weight_function = lambda n: get_esrm_weights(n, 1.0)
+    elif name == "extremile_lite":
+        weight_function = lambda n: get_extremile_weights(n, 1.5)
+    elif name == "superquantile_lite":
+        weight_function = lambda n: get_superquantile_weights(n, 0.25)
+    elif name == "esrm_lite":
+        weight_function = lambda n: get_esrm_weights(n, 0.5)
+    elif name == "extremile_hard":
+        weight_function = lambda n: get_extremile_weights(n, 2.5)
+    elif name == "superquantile_hard":
+        weight_function = lambda n: get_superquantile_weights(n, 0.75)
+    elif name == "esrm_hard":
+        weight_function = lambda n: get_esrm_weights(n, 2.0)
 
     return Objective(
         X,
@@ -182,10 +173,6 @@ def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
     )
 
 
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
-
 def compute_metrics(epoch, optimizer, val_objective, elapsed):
     return {
         "epoch": epoch,
@@ -197,11 +184,6 @@ def compute_metrics(epoch, optimizer, val_objective, elapsed):
         "elapsed": elapsed,
     }
 
-
-# ---------------------------------------------------------------------------
-# Main entry point: compute and cache training curves
-# ---------------------------------------------------------------------------
-
 def compute_training_curve(
     dataset,
     model_cfg,
@@ -209,40 +191,38 @@ def compute_training_curve(
     seed,
     n_epochs,
     out_path="results/",
-    data_path="data/",
+    data_path="data/"
 ):
     X_train, y_train, X_val, y_val = load_dataset(dataset, data_path=data_path)
 
     if model_cfg["loss"] == "multinomial_cross_entropy":
         model_cfg["n_class"] = len(torch.unique(y_train))
 
-    if result_exists(dataset, model_cfg, optim_cfg, seed, out_path=out_path):
+    # check if result exists
+    if (
+        result_exists(dataset, model_cfg, optim_cfg, seed, out_path=out_path)
+    ):
         print("*** Result exists ***")
-        print(f"  dataset:   {dataset}")
-        print(f"  model_cfg: {model_cfg}")
-        print(f"  optim_cfg: {optim_cfg}")
-        print(f"  seed:      {seed}")
-        return SUCCESS_CODE
-
-    train_objective = get_objective(model_cfg, X_train, y_train, dataset=dataset)
-    val_objective   = get_objective(model_cfg, X_val,   y_val,   dataset=dataset)
-    optimizer = get_optimizer(optim_cfg, train_objective, seed)
-
-    try:
-        result = train_model(optimizer, val_objective, n_epochs)
+        print("*********************")
+        print(f"dataset: {dataset}")
+        print(f"model_cfg: {model_cfg}")
+        print(f"optim_cfg: {optim_cfg}")
+        print(f"seed: {seed}")
+        print("*********************")
         exit_code = SUCCESS_CODE
-    except OptimizationError as e:
-        print(f"[OptimizationError] {e}")
-        result = FAIL_CODE
-        exit_code = FAIL_CODE
+    else:
+        train_objective = get_objective(model_cfg, X_train, y_train, dataset=dataset)
+        val_objective = get_objective(model_cfg, X_val, y_val, dataset=dataset)
+        optimizer = get_optimizer(optim_cfg, train_objective, seed)
+        try:
+            result = train_model(optimizer, val_objective, n_epochs)
+            exit_code = SUCCESS_CODE
+        except OptimizationError as e:
+            result = FAIL_CODE
+            exit_code = FAIL_CODE
+        save_results(result, dataset, model_cfg, optim_cfg, seed, out_path=out_path)
+        return exit_code
 
-    save_results(result, dataset, model_cfg, optim_cfg, seed, out_path=out_path)
-    return exit_code
-
-
-# ---------------------------------------------------------------------------
-# Result caching helpers
-# ---------------------------------------------------------------------------
 
 def result_exists(dataset, model_cfg, optim_cfg, seed, out_path="results"):
     path = "/".join([out_path, dataset, var_to_str(model_cfg), var_to_str(optim_cfg)])
@@ -251,12 +231,12 @@ def result_exists(dataset, model_cfg, optim_cfg, seed, out_path="results"):
 
 
 def format_time(elapsed):
-    return str(datetime.timedelta(seconds=int(round(elapsed))))
+    # Round to the nearest second.
+    elapsed_rounded = int(round((elapsed)))
 
+    # Format as hh:mm:ss
+    return str(datetime.timedelta(seconds=elapsed_rounded))
 
-# ---------------------------------------------------------------------------
-# Hyperparameter selection helpers
-# ---------------------------------------------------------------------------
 
 def compute_average_train_loss(
     dataset, model_cfg, optim_cfg, seeds, out_path="results/"
@@ -269,46 +249,46 @@ def compute_average_train_loss(
         total += torch.tensor(results["metrics"]["train_loss"])
     return total / len(seeds)
 
-
 def find_best_optim_cfg(dataset, model_cfg, optim_cfgs, seeds, out_path="results/"):
-    """Select best config by lowest average train loss over last 10 epochs."""
+    # Compute optimal hyperparameters by lowest average final train loss.
     best_loss = torch.inf
     best_traj = None
-    best_cfg  = None
-
+    best_cfg = None
     for optim_cfg in optim_cfgs:
         avg_train_loss = compute_average_train_loss(
             dataset, model_cfg, optim_cfg, seeds, out_path=out_path
         )
+        # if len(avg_train_loss) > 1 and torch.trapezoid(avg_train_loss) < best_loss:
         if len(avg_train_loss) > 1 and torch.mean(avg_train_loss[-10:]) < best_loss:
             best_loss = torch.mean(avg_train_loss[-10:])
             best_traj = avg_train_loss
-            best_cfg  = optim_cfg
+            best_cfg = optim_cfg
 
+    # Collect results for best configuration.
     df = pd.DataFrame(
         {
-            "epoch": list(range(len(best_traj))),
-            "average_train_loss": [v.item() for v in best_traj],
+            "epoch": [i for i in range(len(best_traj))],
+            "average_train_loss": [val.item() for val in best_traj],
         }
     )
 
-    path = get_path(
-        [dataset, var_to_str(model_cfg), optim_cfgs[0]["optimizer"]], out_path=out_path
-    )
+    path = get_path([dataset, var_to_str(model_cfg), optim_cfgs[0]["optimizer"]], out_path=out_path)
 
     for seed in seeds:
         results = load_results(dataset, model_cfg, best_cfg, seed, out_path=out_path)
         df[f"seed_{seed}_train"] = results["metrics"]["train_loss"]
-        df[f"seed_{seed}_val"]   = results["metrics"]["val_loss"]
-        if "nb_checkpoints" in results:
+        df[f"seed_{seed}_val"] = results["metrics"]["val_loss"]
+        if "nb_checkpoints" in results.keys():
+            nb_checkpoints = results["nb_checkpoints"]
             pickle.dump(
-                results["nb_checkpoints"],
-                open(os.path.join(path, "nb_checkpoints.p"), "wb"),
+                nb_checkpoints, open(os.path.join(path, "nb_checkpoints.p"), "wb")
             )
-        if seed in (0, 1):
+        if seed == 1 or seed == 0:
             weights = results["weights"]
 
-    print(f"Saving results to: {path}")
-    pickle.dump(best_cfg,   open(os.path.join(path, "best_cfg.p"),     "wb"))
-    pickle.dump(weights,    open(os.path.join(path, "best_weights.p"), "wb"))
-    pickle.dump(df,         open(os.path.join(path, "best_traj.p"),    "wb"))
+    print("Saving results to location:")
+    print(path)
+
+    pickle.dump(best_cfg, open(os.path.join(path, "best_cfg.p"), "wb"))
+    pickle.dump(weights, open(os.path.join(path, "best_weights.p"), "wb"))
+    pickle.dump(df, open(os.path.join(path, "best_traj.p"), "wb"))
