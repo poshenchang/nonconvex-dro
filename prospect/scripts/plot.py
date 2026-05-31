@@ -1,202 +1,263 @@
+"""
+plot.py  —  Visualize training curves from results produced by train.py.
+
+Usage:
+    python plot.py --input_path results/diabetes/distance_metric_euclidean_...
+
+Outputs (written to input_path/):
+    <optimizer>.png   — per-LR curves for each optimizer, two subplots (seed 1 / seed 2)
+    all.png           — best-config curve for every optimizer on one plot
+"""
+
 import os
-import argparse
-import pickle
 import re
-from pathlib import Path
-import matplotlib.pyplot as plt
+import pickle
+import argparse
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Plot logarithmic training loss curves for different learning rates.")
-    parser.add_argument(
-        "--input_dir", 
-        type=str, 
-        required=True, 
-        help="Path to the results directory (e.g., prospect/results/diabetes/...)"
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--input_path",
+    type=str,
+    required=True,
+    help="Path to the model-config result folder (contains per-LR and best-config subdirs).",
+)
+parser.add_argument(
+    "--loss_key",
+    type=str,
+    default="train_loss",
+    choices=["train_loss", "train_loss_unreg", "val_loss"],
+    help="Which loss column to plot (default: train_loss).",
+)
+parser.add_argument(
+    "--seeds",
+    type=int,
+    nargs="+",
+    default=[1, 2],
+    help="Seeds to plot as subplots (default: 1 2).",
+)
+args = parser.parse_args()
+
+INPUT_PATH = args.input_path.rstrip("/")
+LOSS_KEY   = args.loss_key
+SEEDS      = args.seeds
+
+
+# ---------------------------------------------------------------------------
+# Folder parsing
+# ---------------------------------------------------------------------------
+
+# Long-form folder: "distance_metric_euclidean_lr_3.00e-06_optimizer_srda_penalty_l2_shift_cost_1.00e+00"
+_LR_RE   = re.compile(r"_lr_([0-9.e+\-]+)_")
+_OPT_RE  = re.compile(r"_optimizer_([^_]+)_")
+
+def parse_lr_folder(name):
+    """Extract (optimizer, lr_float) from a long-form folder name. Returns None if no match."""
+    m_opt = _OPT_RE.search(name)
+    m_lr  = _LR_RE.search(name)
+    if m_opt and m_lr:
+        return m_opt.group(1), float(m_lr.group(1))
+    return None
+
+def is_best_cfg_folder(name):
+    """Short-form folders (e.g. 'lsvrg', 'prospect') hold best-config results."""
+    return _LR_RE.search(name) is None and _OPT_RE.search(name) is None
+
+
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Scan input_path and group results
+# ---------------------------------------------------------------------------
+
+# lr_results[optimizer][lr][seed] = metrics DataFrame
+lr_results = {}
+
+# best_results[optimizer] = best_traj DataFrame
+best_results = {}
+
+for entry in sorted(os.scandir(INPUT_PATH), key=lambda e: e.name):
+    if not entry.is_dir():
+        continue
+    name = entry.name
+
+    parsed = parse_lr_folder(name)
+    if parsed is not None:
+        # Per-LR result folder.
+        optimizer, lr = parsed
+        lr_results.setdefault(optimizer, {}).setdefault(lr, {})
+        for seed in SEEDS:
+            seed_file = os.path.join(entry.path, f"seed_{seed}.p")
+            if os.path.exists(seed_file):
+                result = load_pickle(seed_file)
+                # result may be FAIL_CODE (-1) if training diverged
+                if isinstance(result, dict) and "metrics" in result:
+                    lr_results[optimizer][lr][seed] = result["metrics"]
+
+    elif is_best_cfg_folder(name):
+        # Best-config summary folder — optimizer name is the folder name itself.
+        optimizer = name
+        traj_file = os.path.join(entry.path, "best_traj.p")
+        if os.path.exists(traj_file):
+            best_results[optimizer] = load_pickle(traj_file)
+
+
+# ---------------------------------------------------------------------------
+# Color helpers
+# ---------------------------------------------------------------------------
+
+def make_lr_colormap(lrs):
+    """Assign a distinct color to each lr value, sorted ascending."""
+    sorted_lrs = sorted(lrs)
+    colors = cm.viridis(np.linspace(0.1, 0.9, len(sorted_lrs)))
+    return {lr: colors[i] for i, lr in enumerate(sorted_lrs)}
+
+# Fixed color per optimizer for the combined plot.
+_OPTIMIZER_COLORS = [
+    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
+    "#ff7f00", "#a65628", "#f781bf", "#999999",
+]
+
+def optimizer_color(optimizers):
+    return {opt: _OPTIMIZER_COLORS[i % len(_OPTIMIZER_COLORS)]
+            for i, opt in enumerate(sorted(optimizers))}
+
+
+# ---------------------------------------------------------------------------
+# Plot 1: per-optimizer, per-LR curves (one figure per optimizer)
+# ---------------------------------------------------------------------------
+
+def safe_clip(values):
+    """Clip to a small positive floor so log-scale axes don't break on zero."""
+    return np.clip(np.asarray(values, dtype=float), 1e-12, None)
+
+
+def plot_optimizer(optimizer, lr_seed_metrics):
+    """
+    Draw one figure for a single optimizer.
+    Subplots = one per seed. Lines = one per LR, colored by magnitude.
+    Y-axis uses log scale so raw loss values are displayed with log spacing.
+    """
+    lrs       = sorted(lr_seed_metrics.keys())
+    color_map = make_lr_colormap(lrs)
+    n_seeds   = len(SEEDS)
+
+    fig, axes = plt.subplots(
+        1, n_seeds,
+        figsize=(6 * n_seeds, 4),
+        sharey=True,
     )
-    return parser.parse_args()
+    if n_seeds == 1:
+        axes = [axes]
 
-def robust_load(filepath):
-    """Attempt to load using standard pickle first to avoid PyTorch weights_only warnings."""
-    try:
-        with open(filepath, 'rb') as f:
-            return pickle.load(f)
-    except Exception:
-        try:
-            import torch
-            return torch.load(filepath, map_location='cpu', weights_only=False)
-        except Exception:
-            return None
+    fig.suptitle(f"{optimizer}  —  {LOSS_KEY}", fontsize=13)
 
-def extract_metadata(filepath, result_dict):
-    """Extract learning rate, seed, and training loss from the loaded dictionary and filepath."""
-    if not isinstance(result_dict, dict) or "metrics" not in result_dict:
-        return None, None, None
+    for ax, seed in zip(axes, SEEDS):
+        ax.set_title(f"seed {seed}")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel(LOSS_KEY if ax == axes[0] else "")
+        ax.set_yscale("log")  # log scale on y-axis; tick labels remain raw loss values
 
-    metrics_data = result_dict["metrics"]
-    train_loss = None
+        for lr in lrs:
+            metrics = lr_seed_metrics[lr].get(seed)
+            if metrics is None:
+                continue  # result missing or diverged
+            epochs = metrics["epoch"].values
+            loss   = safe_clip(metrics[LOSS_KEY].values)
+            ax.plot(
+                epochs, loss,
+                color=color_map[lr],
+                linewidth=1.2,
+                label=f"lr={lr:.1e}",
+            )
 
-    # Handle both pandas DataFrame and raw dictionary formats safely
-    if isinstance(metrics_data, pd.DataFrame) and "train_loss" in metrics_data.columns:
-        train_loss = metrics_data["train_loss"].tolist()
-    elif isinstance(metrics_data, dict) and "train_loss" in metrics_data:
-        train_loss = metrics_data["train_loss"]
+        ax.grid(True, linestyle="--", alpha=0.4)
 
-    if train_loss is None:
-        return None, None, None
-
-    # Ensure all loss elements are standard floats
-    try:
-        train_loss = [float(v.item() if hasattr(v, 'item') else v) for v in train_loss]
-    except Exception:
-        return None, None, None
-
-    # Extract seed from filename (e.g., seed_1.p -> 1)
-    filename = filepath.name
-    seed_match = re.search(r'seed_?(\d+)', filename)
-    seed = int(seed_match.group(1)) if seed_match else None
-
-    # Extract learning rate (LR) from the full path string (parent directory name)
-    path_str = str(filepath)
-    lr_match = re.search(r'lr_([0-9eE\.\-\+]+)', path_str)
-    lr = None
-    if lr_match:
-        try:
-            lr = float(lr_match.group(1))
-        except ValueError:
-            pass
-
-    return lr, seed, train_loss
-
-def main():
-    args = parse_args()
-    input_dir = Path(args.input_dir)
-
-    if not input_dir.exists():
-        print(f"Error: Directory '{input_dir}' does not exist.")
-        return
-
-    # Dictionary to hold data dynamically: data[seed][lr] = [loss_values...]
-    data = {}
-    
-    # Locate all checkpoint files, ignoring top-level summary checkpoints
-    file_extensions = ["*.p", "*.pt", "*.pkl"]
-    files = []
-    for ext in file_extensions:
-        files.extend(list(input_dir.rglob(ext)))
-    files = [f for f in files if "nb_checkpoints" not in f.name and "best_" not in f.name]
-
-    print(f"Scanning {len(files)} files in directory...")
-
-    # Process and extract metrics from files
-    for filepath in files:
-        result_dict = robust_load(filepath)
-        if result_dict is None:
-            continue
-            
-        lr, seed, train_loss = extract_metadata(filepath, result_dict)
-        
-        if lr is not None and seed is not None and train_loss is not None:
-            if seed not in data:
-                data[seed] = {}
-            data[seed][lr] = np.array(train_loss)
-
-    # Validate if any metrics were recovered
-    all_lrs = set()
-    for seed in data:
-        all_lrs.update(data[seed].keys())
-
-    if not all_lrs:
-        print("Warning: No valid training data found in the specified directory.")
-        print("Please verify that the directory contains 'seed_X.p' files inside hyperparameter subfolders.")
-        return
-
-    best_lr = None
-    best_loss = float('inf')
-    convergent_lrs = set()
-    divergent_lrs = set()
-
-    for lr in all_lrs:
-        final_losses = []
-        is_divergent = False
-
-        for seed in data:
-            if lr in data[seed]:
-                loss_curve = data[seed][lr]
-                # Identify divergence via NaNs, Infs, or massive final loss thresholds
-                if np.isnan(loss_curve).any() or np.isinf(loss_curve).any() or (len(loss_curve) > 0 and loss_curve[-1] > 1e4):
-                    is_divergent = True
-                elif len(loss_curve) > 0:
-                    final_losses.append(loss_curve[-1])
-
-        if is_divergent or len(final_losses) == 0:
-            divergent_lrs.add(lr)
-        else:
-            convergent_lrs.add(lr)
-            avg_final_loss = np.mean(final_losses)
-            if avg_final_loss < best_loss:
-                best_loss = avg_final_loss
-                best_lr = lr
-
-    # Terminal Summary Output
-    print("\n" + "=" * 60)
-    print("TRAINING CURVE ANALYSIS SUMMARY")
-    print("=" * 60)
-    if best_lr is not None:
-        print(f"[+] Best Learning Rate : {best_lr} (Final Avg Loss: {best_loss:.6f})")
-    else:
-        print("[-] Best Learning Rate : None (All runs diverged or missing)")
-        
-    print(f"[+] Convergent LRs     : {sorted(list(convergent_lrs))}")
-    print(f"[-] Divergent LRs      : {sorted(list(divergent_lrs))}")
-    print("=" * 60 + "\n")
-
-    # Setup plotting configuration
-    plot_path = input_dir / "plot.png"
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-    fig.suptitle(f"Training Loss Curves", fontsize=16)
-
-    # Assign distinct colors to each unique learning rate
-    sorted_lrs = sorted(list(all_lrs))
-    cmap = plt.get_cmap('tab20')
-    colors = [cmap(i) for i in np.linspace(0, 1, len(sorted_lrs))]
-    lr_to_color = dict(zip(sorted_lrs, colors))
-
-    # Plot both requested seed subplots (Seed 1 and Seed 2)
-    for idx, seed in enumerate([1, 2]):
-        ax = axes[idx]
-        ax.set_title(f"Seed {seed}", fontsize=14)
-        ax.set_xlabel("Epoch", fontsize=12)
-        if idx == 0:
-            ax.set_ylabel("Log Average Train Loss", fontsize=12)
-
-        ax.set_yscale('log')
-        ax.grid(True, which="both", ls="--", alpha=0.4)
-
-        if seed_data := data.get(seed):
-            for lr in sorted_lrs:
-                if lr in seed_data:
-                    loss_curve = seed_data[lr]
-                    linestyle = '-' if lr in convergent_lrs else ':'
-                    alpha_val = 0.9 if lr in convergent_lrs else 0.4
-                    
-                    ax.plot(
-                        loss_curve, 
-                        label=f"lr={lr}", 
-                        color=lr_to_color[lr], 
-                        linewidth=2,
-                        linestyle=linestyle,
-                        alpha=alpha_val
-                    )
-            ax.legend(loc='upper right', fontsize=9, ncol=2)
-        else:
-            ax.text(0.5, 0.5, f"No Data for Seed {seed}", ha='center', va='center', transform=ax.transAxes)
+    # Shared legend on the right of the last subplot.
+    handles, labels = axes[-1].get_legend_handles_labels()
+    if handles:
+        axes[-1].legend(
+            handles, labels,
+            fontsize=7,
+            loc="upper right",
+            framealpha=0.7,
+            ncol=max(1, len(lrs) // 8),
+        )
 
     plt.tight_layout()
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"[*] Success! Plot saved to: {plot_path}")
+    out = os.path.join(INPUT_PATH, f"{optimizer}.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out}")
 
-if __name__ == "__main__":
-    main()
+
+for optimizer, lr_seed_metrics in lr_results.items():
+    if not lr_seed_metrics:
+        continue
+    print(f"Plotting {optimizer} ({len(lr_seed_metrics)} LR configs)...")
+    plot_optimizer(optimizer, lr_seed_metrics)
+
+
+# ---------------------------------------------------------------------------
+# Plot 2: all optimizers, best config, averaged over seeds
+# ---------------------------------------------------------------------------
+
+def plot_all_best(best_results):
+    """
+    One curve per optimizer using its best-config average training loss.
+    Falls back to seed-level columns when average_train_loss is unavailable.
+    Y-axis uses log scale; tick labels remain raw loss values.
+    """
+    if not best_results:
+        print("No best_traj.p files found — skipping all.png.")
+        return
+
+    opt_colors = optimizer_color(best_results.keys())
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_title(f"Best config — {LOSS_KEY}", fontsize=13)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel(LOSS_KEY)
+    ax.set_yscale("log")  # log scale on y-axis
+
+    for optimizer, df in sorted(best_results.items()):
+        color = opt_colors[optimizer]
+
+        # Prefer the pre-averaged column; fall back to mean of per-seed columns.
+        if "average_train_loss" in df.columns and LOSS_KEY == "train_loss":
+            loss_vals = df["average_train_loss"].values
+        else:
+            # Build average from whichever seed columns exist.
+            key_suffix = LOSS_KEY.replace("train_loss", "train").replace("val_loss", "val")
+            seed_cols = [c for c in df.columns if c.endswith(f"_{key_suffix}")]
+            if not seed_cols:
+                print(f"  [{optimizer}] no usable columns for '{LOSS_KEY}', skipping.")
+                continue
+            loss_vals = df[seed_cols].mean(axis=1).values
+
+        epochs = df["epoch"].values
+        loss   = safe_clip(loss_vals)
+
+        ax.plot(epochs, loss, color=color, linewidth=2.0, label=optimizer)
+
+    ax.legend(fontsize=9, loc="upper right", framealpha=0.8)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+
+    out = os.path.join(INPUT_PATH, "all.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+print("Plotting best-config comparison (all optimizers)...")
+plot_all_best(best_results)

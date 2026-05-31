@@ -31,7 +31,7 @@ for dataset in "${datasets[@]}"; do
                 --dataset "${dataset}" \
                 --objective "${objective}" \
                 --optimizer "${optimizer}" \
-                --parallel 0 # Safer for mlp tasks
+                # --parallel 0 Safer for mlp tasks
                 
         done
     done
