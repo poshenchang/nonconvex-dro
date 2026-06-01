@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted
+from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted, get_wasserstein_weights
 
 
 class Optimizer:
@@ -190,6 +190,19 @@ class SmoothedLSVRG(Optimizer):
         self.uniform = uniform
         self.smooth_coef = n * smooth_coef if smoothing == "l2" else smooth_coef
         self.smoothing = smoothing
+        
+        if self.smoothing == "wasserstein":
+            self.C = getattr(self.objective, "C", None)
+            if self.C is None:
+                X = self.objective.X
+                self.C = torch.cdist(X.double(), X.double(), p=2.0)
+            self.K = getattr(self.objective, "K", None)
+            if self.K is None:
+                self.K = torch.exp(-self.C / 0.1)
+        else:
+            self.C = None
+            self.K = None
+
         if length_epoch:
             self.length_epoch = length_epoch
         else:
@@ -207,10 +220,16 @@ class SmoothedLSVRG(Optimizer):
         # start epoch
         if self.step_no % n == 0:
             losses = self.objective.get_indiv_loss(self.weights, with_grad=False)
-            sorted_losses, self.argsort = torch.sort(losses, stable=True)
-            self.sigmas = get_smooth_weights_sorted(
-                sorted_losses, self.spectrum, self.smooth_coef, self.smoothing
-            )
+            
+            if self.smoothing == "wasserstein":
+                self.sigmas = get_wasserstein_weights(losses, self.C, self.smooth_coef, epsilon=0.1, K=self.K)
+                self.argsort = torch.arange(n)
+            else:
+                sorted_losses, self.argsort = torch.sort(losses, stable=True)
+                self.sigmas = get_smooth_weights_sorted(
+                    sorted_losses, self.spectrum, self.smooth_coef, self.smoothing
+                )
+                
             with torch.enable_grad():
                 self.subgrad_checkpt = self.objective.get_batch_subgrad(self.weights, include_reg=False)
             self.weights_checkpt = torch.clone(self.weights)
