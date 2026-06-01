@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define hyperparameter arrays
-datasets=("yacht" "iwildcam") # datasets=("yacht" "energy" "concrete" "kin8nm" "power" "acsincome" "iwildcam" "amazon" "diabetes")
+datasets=("yacht" "iwildcam" "diabetes") # datasets=("yacht" "energy" "concrete" "kin8nm" "power" "acsincome" "iwildcam" "amazon" "diabetes")
 objectives=("erm") # objectives=("erm" "extremile" "superquantile" "esrm")
 optimizers=("sgd" "srda" "lsvrg" "saddlesaga" "prospect")
 

@@ -6,6 +6,47 @@ from numba import jit
 import warnings
 
 
+
+def _kaiming_init(num_params, objective, seed=0):
+    """
+    Kaiming (He) initialization for a flat MLP weight vector.
+    For non-MLP losses, falls back to zeros (linear models are convex,
+    so initialization does not affect convergence qualitatively).
+    W ~ N(0, sqrt(2 / fan_in)) per layer; biases set to zero.
+    """
+    if not getattr(objective, 'autodiff', False):
+        return torch.zeros(num_params, dtype=torch.float64)
+
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    d          = objective.d
+    hidden_dim = getattr(objective, 'hidden_dim', 128)
+    n_class    = getattr(objective, 'n_class', None)
+    w          = torch.zeros(num_params, dtype=torch.float64)
+
+    # W1: (d, hidden_dim)  fan_in = d
+    w1_end = d * hidden_dim
+    w[:w1_end] = torch.randn(w1_end, generator=rng, dtype=torch.float64) * (2.0 / d) ** 0.5
+    # b1: zeros (already zero)
+    b1_end = w1_end + hidden_dim
+
+    if n_class is not None and n_class > 1:
+        # Multinomial head: W2 (hidden_dim, n_class), b2 (n_class,)
+        w2_size = hidden_dim * n_class
+        w[b1_end:b1_end + w2_size] = (
+            torch.randn(w2_size, generator=rng, dtype=torch.float64)
+            * (2.0 / hidden_dim) ** 0.5
+        )
+    else:
+        # Binary / regression head: W2 (hidden_dim, 1), b2 scalar
+        w2_end = b1_end + hidden_dim
+        w[b1_end:w2_end] = (
+            torch.randn(hidden_dim, generator=rng, dtype=torch.float64)
+            * (2.0 / hidden_dim) ** 0.5
+        )
+    return w
+
+
 class Prospect(Optimizer):
     def __init__(
         self,
@@ -34,7 +75,7 @@ class Prospect(Optimizer):
             "num_parameters",
             objective.n_class * objective.d if objective.n_class else objective.d,
         )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
+        self.weights = _kaiming_init(num_params, objective).requires_grad_(True)
         self.grad_table = torch.zeros(n, num_params, dtype=torch.float64)
 
         self.sigmas = self.objective.sigmas
@@ -166,7 +207,7 @@ class ProspectMoreau(Optimizer):
             "num_parameters",
             objective.n_class * objective.d if objective.n_class else objective.d,
         )
-        self.weights = torch.zeros(num_params, requires_grad=True, dtype=torch.float64)
+        self.weights = _kaiming_init(num_params, objective).requires_grad_(True)
         self.grad_table = torch.zeros(n, num_params, dtype=torch.float64)
 
         self.sigmas = self.objective.sigmas

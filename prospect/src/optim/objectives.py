@@ -67,7 +67,7 @@ def mlp_binary_cross_entropy_loss(w, X, y, hidden_dim=128):
     W2 = w[b1_end:w2_end].view(hidden_dim, 1)
     b2 = w[-1]
 
-    h = F.relu(torch.matmul(X, W1) + b1)
+    h = F.leaky_relu(torch.matmul(X, W1) + b1, negative_slope=0.01)
     logits = torch.matmul(h, W2).squeeze(-1) + b2
 
     return F.binary_cross_entropy_with_logits(logits, y.float(), reduction="none")
@@ -96,7 +96,7 @@ def mlp_squared_error_loss(w, X, y, hidden_dim=128):
     W2 = w[b1_end:w2_end].view(hidden_dim, 1)
     b2 = w[-1]
 
-    h    = F.relu(torch.matmul(X, W1) + b1)
+    h    = F.leaky_relu(torch.matmul(X, W1) + b1, negative_slope=0.01)
     yhat = torch.matmul(h, W2).squeeze(-1) + b2
 
     return 0.5 * (y.double() - yhat.double()) ** 2
@@ -120,7 +120,7 @@ def mlp_multinomial_cross_entropy_loss(w, X, y, n_class, hidden_dim=128):
     W2 = w[b1_end:w2_end].view(hidden_dim, n_class)
     b2 = w[w2_end:w2_end + n_class]
 
-    h      = F.relu(torch.matmul(X, W1) + b1)
+    h      = F.leaky_relu(torch.matmul(X, W1) + b1, negative_slope=0.01)
     logits = torch.matmul(h, W2) + b2
 
     return F.cross_entropy(logits.float(), y, reduction="none")
