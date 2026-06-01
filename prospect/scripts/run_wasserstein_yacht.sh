@@ -15,8 +15,8 @@ penalty="wasserstein"
 # Run LBFGS to compute exact optimum for suboptimality benchmarks
 ../.venv/bin/python scripts/lbfgs.py --dataset $dataset --objective $objective --penalty $penalty
 
-# Run baseline methods (sgd, srda) along with the wasserstein-dro method (prospect)
-for optim in sgd srda prospect
+# Run baseline methods (sgd, srda, lsvrg) along with the wasserstein-dro method (prospect)
+for optim in sgd srda lsvrg prospect
 do
     # Reduced n_jobs to 2 to strictly avoid memory and thread exhaustion
     taskset -c $tasks ../.venv/bin/python scripts/train.py --dataset $dataset --objective $objective --optimizer $optim --penalty $penalty --n_jobs 2 --n_epochs 128

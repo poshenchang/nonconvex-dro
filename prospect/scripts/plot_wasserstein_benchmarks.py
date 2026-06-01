@@ -5,9 +5,9 @@ import numpy as np
 
 def plot_benchmarks():
     datasets = ['yacht', 'energy', 'concrete']
-    optimizers = ['sgd', 'srda', 'prospect']
-    colors = {'sgd': 'black', 'srda': 'gray', 'prospect': 'red'}
-    markers = {'sgd': 'v', 'srda': '.', 'prospect': '^'}
+    optimizers = ['sgd', 'srda', 'lsvrg', 'prospect']
+    colors = {'sgd': 'black', 'srda': 'gray', 'lsvrg': 'teal', 'prospect': 'red'}
+    markers = {'sgd': 'v', 'srda': '.', 'lsvrg': 'o', 'prospect': '^'}
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     plt.subplots_adjust(wspace=0.3)
@@ -50,9 +50,17 @@ def plot_benchmarks():
             eps = 1e-9
             subopt = (train_loss - min_loss + eps) / (init_loss - min_loss + eps)
             
+            # Handle labels correctly for the legend
+            if opt == 'prospect':
+                label_str = 'Prospect (Ours)'
+            elif opt == 'lsvrg':
+                label_str = 'LSVRG'
+            else:
+                label_str = opt.upper()
+                
             ax.plot(epochs, subopt, color=colors[opt], marker=markers[opt], 
-                    label=opt.upper() if opt != 'prospect' else 'Prospect (Ours)', 
-                    linewidth=2, markersize=6)
+                    label=label_str, 
+                    linewidth=2, markersize=6, markevery=15)
             
         ax.set_yscale('log')
         ax.set_title(dataset, fontsize=16)
@@ -62,7 +70,7 @@ def plot_benchmarks():
 
     # Create a single legend at the bottom
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, -0.05), ncol=3, fontsize=14)
+    fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, -0.05), ncol=4, fontsize=14)
 
     save_path = 'figures/wasserstein_benchmarks.png'
     plt.savefig(save_path, bbox_inches='tight', dpi=300)
