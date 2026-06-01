@@ -27,7 +27,7 @@ SUCCESS_CODE = 0
 FAIL_CODE = -1
 
 # Losses that require gradient-mapping oracle (no closed-form prox)
-_GRAD_ORACLE_LOSSES = {"mlp_binary_cross_entropy"}
+_GRAD_ORACLE_LOSSES = {"mlp_binary_cross_entropy", "mlp_squared_error", "mlp_multinomial_cross_entropy"}
 
 
 class OptimizationError(RuntimeError):
@@ -179,6 +179,7 @@ def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
         penalty=penalty,
         autodiff=autodiff,
         distance_metric=distance_metric,
+        hidden_dim=model_cfg.get("hidden_dim", 16),
     )
 
 

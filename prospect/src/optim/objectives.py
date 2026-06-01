@@ -78,11 +78,65 @@ def mlp_num_parameters(d, hidden_dim=128):
     return d * hidden_dim + hidden_dim + hidden_dim + 1
 
 
+def mlp_squared_error_loss(w, X, y, hidden_dim=128):
+    """
+    One-hidden-layer MLP for regression.
+    w layout: [W1 | b1 | W2 | b2]
+      W1: (d, hidden_dim)  b1: (hidden_dim,)
+      W2: (hidden_dim, 1)  b2: scalar
+    Returns per-sample squared error: 0.5 * (y - yhat)^2.
+    """
+    d = X.shape[1]
+    w1_end = d * hidden_dim
+    b1_end = w1_end + hidden_dim
+    w2_end = b1_end + hidden_dim
+
+    W1 = w[:w1_end].view(d, hidden_dim)
+    b1 = w[w1_end:b1_end]
+    W2 = w[b1_end:w2_end].view(hidden_dim, 1)
+    b2 = w[-1]
+
+    h    = F.relu(torch.matmul(X, W1) + b1)
+    yhat = torch.matmul(h, W2).squeeze(-1) + b2
+
+    return 0.5 * (y.double() - yhat.double()) ** 2
+
+
+def mlp_multinomial_cross_entropy_loss(w, X, y, n_class, hidden_dim=128):
+    """
+    One-hidden-layer MLP for multi-class classification.
+    w layout: [W1 | b1 | W2 | b2]
+      W1: (d, hidden_dim)        b1: (hidden_dim,)
+      W2: (hidden_dim, n_class)  b2: (n_class,)
+    Returns per-sample cross-entropy loss.
+    """
+    d = X.shape[1]
+    w1_end = d * hidden_dim
+    b1_end = w1_end + hidden_dim
+    w2_end = b1_end + hidden_dim * n_class
+
+    W1 = w[:w1_end].view(d, hidden_dim)
+    b1 = w[w1_end:b1_end]
+    W2 = w[b1_end:w2_end].view(hidden_dim, n_class)
+    b2 = w[w2_end:w2_end + n_class]
+
+    h      = F.relu(torch.matmul(X, W1) + b1)
+    logits = torch.matmul(h, W2) + b2
+
+    return F.cross_entropy(logits.float(), y, reduction="none")
+
+
+def mlp_multinomial_num_parameters(d, n_class, hidden_dim=128):
+    """Total parameters for multinomial MLP: W1 + b1 + W2 + b2."""
+    return d * hidden_dim + hidden_dim + hidden_dim * n_class + n_class
+
+
+
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
 
-def get_loss(name, n_class=None):
+def get_loss(name, n_class=None, hidden_dim=128):
     if name == "squared_error":
         return squared_error_loss
     elif name == "binary_cross_entropy":
@@ -90,11 +144,16 @@ def get_loss(name, n_class=None):
     elif name == "multinomial_cross_entropy":
         return lambda w, X, y: multinomial_cross_entropy_loss(w, X, y, n_class)
     elif name == "mlp_binary_cross_entropy":
-        return mlp_binary_cross_entropy_loss          # uses autograd; no closed-form grad
+        return lambda w, X, y: mlp_binary_cross_entropy_loss(w, X, y, hidden_dim=hidden_dim)
+    elif name == "mlp_squared_error":
+        return lambda w, X, y: mlp_squared_error_loss(w, X, y, hidden_dim=hidden_dim)
+    elif name == "mlp_multinomial_cross_entropy":
+        return lambda w, X, y: mlp_multinomial_cross_entropy_loss(w, X, y, n_class, hidden_dim=hidden_dim)
     else:
         raise ValueError(
-            f"Unrecognized loss '{name}'! Options: ['squared_error', "
-            "'binary_cross_entropy', 'multinomial_cross_entropy', 'mlp_binary_cross_entropy']"
+            f"Unrecognized loss '{name}'! Options: ['squared_error', 'binary_cross_entropy', "
+            "'multinomial_cross_entropy', 'mlp_binary_cross_entropy', "
+            "'mlp_squared_error', 'mlp_multinomial_cross_entropy']"
         )
 
 def get_grad_batch(name, n_class=None):
@@ -104,8 +163,8 @@ def get_grad_batch(name, n_class=None):
         return binary_cross_entropy_gradient
     elif name == "multinomial_cross_entropy":
         return lambda w, X, y: multinomial_cross_entropy_gradient(w, X, y, n_class)
-    elif name == "mlp_binary_cross_entropy":
-        return None                                   # signal to fall back to autograd
+    elif name in ("mlp_binary_cross_entropy", "mlp_squared_error", "mlp_multinomial_cross_entropy"):
+        return None                                   # all MLP losses use autograd
     else:
         raise NotImplementedError
 
@@ -129,12 +188,13 @@ class Objective:
         penalty=None,
         autodiff=True,
         distance_metric="euclidean",
+        hidden_dim=16,
     ):
         self.X = X
         self.y = y
         self.n, self.d = X.shape
         self.weight_function = weight_function
-        self.loss = get_loss(loss, n_class=n_class)
+        self.loss = get_loss(loss, n_class=n_class, hidden_dim=hidden_dim)
         self.grad_batch = get_grad_batch(loss, n_class=n_class)
         self.loss_name = loss
         self.n_class = n_class
@@ -148,12 +208,19 @@ class Objective:
         self.shift_cost = self.n * shift_cost if penalty in ["l2", "wasserstein"] else shift_cost
         self.penalty = penalty
         self.distance_metric = distance_metric
+        self.hidden_dim = hidden_dim
 
         # ------------------------------------------------------------------
-        # Parameter count: flat for MLP, feature-dim for linear models
+        # Parameter count: flat for MLP losses, feature-dim for linear models
         # ------------------------------------------------------------------
         if loss == "mlp_binary_cross_entropy":
-            self.num_parameters = mlp_num_parameters(self.d)
+            self.num_parameters = mlp_num_parameters(self.d, hidden_dim=self.hidden_dim)
+        elif loss == "mlp_squared_error":
+            self.num_parameters = mlp_num_parameters(self.d, hidden_dim=self.hidden_dim)
+        elif loss == "mlp_multinomial_cross_entropy":
+            self.num_parameters = mlp_multinomial_num_parameters(
+                self.d, n_class, hidden_dim=self.hidden_dim
+            )
         elif n_class:
             self.num_parameters = self.d * n_class
         else:
