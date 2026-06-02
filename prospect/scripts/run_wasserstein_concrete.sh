@@ -8,16 +8,19 @@ export NUMEXPR_NUM_THREADS=1
 export TORCH_NUM_THREADS=1
 
 tasks="20-29"
-objective="esrm"
 dataset="concrete"
 penalty="wasserstein"
 
-# Run LBFGS to compute exact optimum for suboptimality benchmarks
-../.venv/bin/python scripts/lbfgs.py --dataset $dataset --objective $objective --penalty $penalty
-
-# Run baseline methods (sgd, srda, lsvrg) along with the wasserstein-dro method (prospect)
-for optim in sgd srda lsvrg prospect
+# Run for all three robust objectives (superquantile = CVaR)
+for objective in esrm superquantile extremile
 do
-    # Reduced n_jobs to 2 to strictly avoid memory and thread exhaustion
-    taskset -c $tasks ../.venv/bin/python scripts/train.py --dataset $dataset --objective $objective --optimizer $optim --penalty $penalty --n_jobs 2 --n_epochs 128
+    # Run LBFGS to compute exact optimum for suboptimality benchmarks
+    ../.venv/bin/python scripts/lbfgs.py --dataset $dataset --objective $objective --penalty $penalty
+
+    # Run baseline methods (sgd, srda, lsvrg) along with the wasserstein-dro method (prospect)
+    for optim in sgd srda lsvrg prospect
+    do
+        # Reduced n_jobs to 2 to strictly avoid memory and thread exhaustion
+        taskset -c $tasks ../.venv/bin/python scripts/train.py --dataset $dataset --objective $objective --optimizer $optim --penalty $penalty --n_jobs 2 --n_epochs 128
+    done
 done
