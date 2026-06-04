@@ -36,9 +36,9 @@ parser.add_argument(
 parser.add_argument(
     "--loss_key",
     type=str,
-    default="val_loss",
+    default="train_loss",
     choices=["train_loss", "train_loss_unreg", "val_loss"],
-    help="Which loss column to plot (default: val_loss).",
+    help="Which loss column to plot (default: train_loss).",
 )
 parser.add_argument(
     "--seeds",
