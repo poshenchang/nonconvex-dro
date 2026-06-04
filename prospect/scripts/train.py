@@ -112,7 +112,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--mlp_loss",
-    type="store_true",
+    action="store_true",
     default=False,
     help="Use MLP (non-linear) loss functions instead of linear ones (default: False).",
 )
