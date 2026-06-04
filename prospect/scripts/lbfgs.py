@@ -67,20 +67,32 @@ parser.add_argument(
     default="euclidean",
     choices=["euclidean", "cosine"],
 )
+parser.add_argument(
+    "--mlp_loss",
+    action="store_true",
+    default=False,
+    help="Use MLP version of the loss function (mlp_* prefix).",
+)
+parser.add_argument(
+    "--hidden_dim",
+    type=int,
+    default=16,
+    help="Hidden layer width for MLP losses (default: 16).",
+)
 args = parser.parse_args()
 
 dataset = args.dataset
 if dataset in ["yacht", "energy", "concrete", "kin8nm", "power", "acsincome"]:
-    loss = "squared_error"
+    loss = "mlp_squared_error" if args.mlp_loss else "squared_error"
     n_class = None
 elif dataset == "iwildcam":
-    loss = "multinomial_cross_entropy"
+    loss = "mlp_multinomial_cross_entropy" if args.mlp_loss else "multinomial_cross_entropy"
     n_class = 60
 elif dataset == "amazon":
-    loss = "multinomial_cross_entropy"
+    loss = "mlp_multinomial_cross_entropy" if args.mlp_loss else "multinomial_cross_entropy"
     n_class = 5
 elif dataset == "diabetes":
-    loss = "binary_cross_entropy"
+    loss = "mlp_binary_cross_entropy" if args.mlp_loss else "binary_cross_entropy"
     n_class = None
 
 model_cfg = {
@@ -91,6 +103,7 @@ model_cfg = {
     "n_class": n_class,
     "penalty": args.penalty,
     "distance_metric": args.distance_metric,
+    "hidden_dim": args.hidden_dim,
 }
 
 X_train, y_train, X_val, y_val = load_dataset(dataset)
@@ -113,11 +126,14 @@ def jac(w):
 
 
 # Run optimizer.
-init = np.zeros((objective.d,), dtype=np.float64)
-if model_cfg["n_class"]:
-    init = np.zeros((model_cfg["n_class"] * objective.d,), dtype=np.float64)
+# For MLP losses use Kaiming init (zeros cause dead ReLU); linear models use zeros.
+if args.mlp_loss:
+    from src.optim.baselines import _kaiming_init
+    init = _kaiming_init(objective.num_parameters, objective).numpy()
 else:
-    init = np.zeros((objective.d,), dtype=np.float64)
+    num_params = (model_cfg["n_class"] * objective.d
+                  if model_cfg["n_class"] else objective.d)
+    init = np.zeros(num_params, dtype=np.float64)
 output = minimize(fun, init, method="L-BFGS-B", jac=jac)
 if output.success:
     path = get_path([dataset, var_to_str(model_cfg)])

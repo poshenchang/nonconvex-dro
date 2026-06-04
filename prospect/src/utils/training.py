@@ -15,6 +15,7 @@ from src.optim.baselines import (
 from src.optim.prospect import Prospect, ProspectMoreau
 from src.optim.objectives import (
     Objective,
+    MLP_LOSSES,
     get_extremile_weights,
     get_superquantile_weights,
     get_esrm_weights,
@@ -25,9 +26,6 @@ from src.utils.data import load_dataset
 
 SUCCESS_CODE = 0
 FAIL_CODE = -1
-
-# Losses that require gradient-mapping oracle (no closed-form prox)
-_GRAD_ORACLE_LOSSES = {"mlp_binary_cross_entropy", "mlp_squared_error", "mlp_multinomial_cross_entropy"}
 
 
 class OptimizationError(RuntimeError):
@@ -111,7 +109,7 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
         )
     elif name == "prospect":
         # Auto-select oracle: gradient mapping for non-linear losses, prox otherwise
-        oracle = "grad" if objective.loss_name in _GRAD_ORACLE_LOSSES else "prox"
+        oracle = "grad" if objective.loss_name in MLP_LOSSES else "prox"
         return Prospect(
             objective,
             lrp=lr,
@@ -141,7 +139,7 @@ def get_optimizer(optim_cfg, objective, seed, device="cpu"):
 # Objective factory
 # ---------------------------------------------------------------------------
 
-def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
+def get_objective(model_cfg, X, y, dataset=None, autodiff=None):
     name            = model_cfg["objective"]
     l2_reg          = model_cfg["l2_reg"]
     loss            = model_cfg["loss"]
@@ -149,6 +147,9 @@ def get_objective(model_cfg, X, y, dataset=None, autodiff=True):
     shift_cost      = model_cfg["shift_cost"]
     penalty         = model_cfg.get("penalty", "l2")
     distance_metric = model_cfg.get("distance_metric", "euclidean")
+
+    if autodiff is None:
+        autodiff = loss in MLP_LOSSES
 
     _weight_fns = {
         "erm":               lambda n: get_erm_weights(n),
@@ -214,7 +215,7 @@ def compute_training_curve(
 ):
     X_train, y_train, X_val, y_val = load_dataset(dataset, data_path=data_path)
 
-    if model_cfg["loss"] == "multinomial_cross_entropy":
+    if model_cfg["loss"] in ("multinomial_cross_entropy", "mlp_multinomial_cross_entropy"):
         model_cfg["n_class"] = len(torch.unique(y_train))
 
     if result_exists(dataset, model_cfg, optim_cfg, seed, out_path=out_path):

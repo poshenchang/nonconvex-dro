@@ -11,6 +11,18 @@ from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted, g
 
 
 # ---------------------------------------------------------------------------
+# Loss-name sets (imported by training.py / train.py to avoid duplication)
+# ---------------------------------------------------------------------------
+
+#: Loss names that require autograd (no closed-form prox / gradient).
+MLP_LOSSES = frozenset({
+    "mlp_binary_cross_entropy",
+    "mlp_squared_error",
+    "mlp_multinomial_cross_entropy",
+})
+
+
+# ---------------------------------------------------------------------------
 # Linear loss functions (unchanged)
 # ---------------------------------------------------------------------------
 

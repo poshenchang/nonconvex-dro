@@ -1,5 +1,5 @@
 """
-Train model for a particular objective and optimizer on evry hyperparameter setting.
+Train model for a particular objective and optimizer on every hyperparameter setting.
 """
 
 import gc
@@ -110,21 +110,27 @@ parser.add_argument(
     default=16,
     help="Hidden layer width for MLP losses (default: 16).",
 )
+parser.add_argument(
+    "--mlp_loss",
+    type="store_true",
+    default=False,
+    help="Use MLP (non-linear) loss functions instead of linear ones (default: False).",
+)
 args = parser.parse_args()
 
 # Configure for input to trainers.
 dataset = args.dataset
 if dataset in ["yacht", "energy", "concrete", "kin8nm", "power", "acsincome"]:
-    loss = "mlp_squared_error" # loss = "squared_error"
+    loss = "mlp_squared_error" if args.mlp_loss else "squared_error"
     n_class = None
 elif dataset == "iwildcam":
-    loss = "mlp_multinomial_cross_entropy" # loss = "multinomial_cross_entropy"
+    loss = "mlp_multinomial_cross_entropy" if args.mlp_loss else "multinomial_cross_entropy"
     n_class = 60
 elif dataset == "amazon":
-    loss = "mlp_multinomial_cross_entropy" # loss = "multinomial_cross_entropy"
+    loss = "mlp_multinomial_cross_entropy" if args.mlp_loss else "multinomial_cross_entropy"
     n_class = 5
 elif dataset == "diabetes":
-    loss = "mlp_binary_cross_entropy" # loss = "binary_cross_entropy"
+    loss = "mlp_binary_cross_entropy" if args.mlp_loss else "binary_cross_entropy"
     n_class = None
 
 model_cfg = {
@@ -164,6 +170,7 @@ config = {
     "seeds": seeds,
     "n_epochs": n_epochs,
     "epoch_len": args.epoch_len,
+    "mlp_loss": args.mlp_loss,
 }
 
 # Display.

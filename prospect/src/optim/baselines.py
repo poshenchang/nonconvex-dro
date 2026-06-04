@@ -4,6 +4,9 @@ from src.optim.smoothing import get_smooth_weights, get_smooth_weights_sorted
 
 
 
+_MLP_LOSSES = {"mlp_binary_cross_entropy", "mlp_squared_error", "mlp_multinomial_cross_entropy"}
+
+
 def _kaiming_init(num_params, objective, seed=0):
     """
     Kaiming (He) initialization for a flat MLP weight vector.
@@ -11,7 +14,7 @@ def _kaiming_init(num_params, objective, seed=0):
     so initialization does not affect convergence qualitatively).
     W ~ N(0, sqrt(2 / fan_in)) per layer; biases set to zero.
     """
-    if not getattr(objective, 'autodiff', False):
+    if getattr(objective, 'loss_name', None) not in _MLP_LOSSES:
         return torch.zeros(num_params, dtype=torch.float64)
 
     rng = torch.Generator()

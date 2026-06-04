@@ -6,7 +6,12 @@ Usage:
 
 Outputs (written to input_path/):
     <optimizer>.png   — per-LR curves for each optimizer, two subplots (seed 1 / seed 2)
-    all.png           — best-config curve for every optimizer on one plot
+    all.png           — best-config suboptimality for every optimizer on one plot
+
+Suboptimality is defined as:
+    (F(w) - F(w*)) / (F(w^0) - F(w*))
+where w* is the L-BFGS optimum loaded from input_path/lbfgs_min_loss.p
+and w^0 is the initial iterate (epoch -1).
 """
 
 import os
@@ -31,9 +36,9 @@ parser.add_argument(
 parser.add_argument(
     "--loss_key",
     type=str,
-    default="train_loss",
+    default="val_loss",
     choices=["train_loss", "train_loss_unreg", "val_loss"],
-    help="Which loss column to plot (default: train_loss).",
+    help="Which loss column to plot (default: val_loss).",
 )
 parser.add_argument(
     "--seeds",
@@ -42,11 +47,48 @@ parser.add_argument(
     default=[1, 2],
     help="Seeds to plot as subplots (default: 1 2).",
 )
+parser.add_argument(
+    "--lbfgs_path",
+    type=str,
+    default=None,
+    help=(
+        "Path to lbfgs_min_loss.p. "
+        "Defaults to input_path/lbfgs_min_loss.p. "
+        "Pass 'none' to skip suboptimality and plot raw loss instead."
+    ),
+)
 args = parser.parse_args()
 
 INPUT_PATH = args.input_path.rstrip("/")
 LOSS_KEY   = args.loss_key
 SEEDS      = args.seeds
+
+# ---------------------------------------------------------------------------
+# Load L-BFGS optimal value for suboptimality normalization
+# ---------------------------------------------------------------------------
+
+def _load_lbfgs_min(input_path, lbfgs_path_arg):
+    """
+    Load the L-BFGS minimum loss F(w*) from a pickle file.
+    Returns None if the file is absent or the user passed --lbfgs_path none.
+    """
+    if lbfgs_path_arg is not None and lbfgs_path_arg.lower() == "none":
+        return None
+    path = lbfgs_path_arg if lbfgs_path_arg else os.path.join(input_path, "lbfgs_min_loss.p")
+    if not os.path.exists(path):
+        print(f"[warning] lbfgs_min_loss.p not found at '{path}' — plotting raw loss.")
+        return None
+    with open(path, "rb") as fh:
+        val = pickle.load(fh)
+    # Stored value may be a 0-d array or a plain float.
+    return float(val)
+
+LBFGS_MIN = _load_lbfgs_min(INPUT_PATH, args.lbfgs_path)
+USE_SUBOPT = LBFGS_MIN is not None
+if USE_SUBOPT:
+    print(f"L-BFGS minimum: {LBFGS_MIN:.6g}  (suboptimality mode)")
+else:
+    print("L-BFGS minimum not available — plotting raw loss.")
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +165,8 @@ def make_lr_colormap(lrs):
 
 # Fixed color per optimizer for the combined plot.
 _OPTIMIZER_COLORS = [
-    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
-    "#ff7f00", "#a65628", "#f781bf", "#999999",
+    "#4daf4a", "#e41a1c", "#ffcc00", "#377eb8",
+    "#984ea3", "#a65628", "#f781bf", "#999999",
 ]
 
 def optimizer_color(optimizers):
@@ -139,6 +181,20 @@ def optimizer_color(optimizers):
 def safe_clip(values):
     """Clip to a small positive floor so log-scale axes don't break on zero."""
     return np.clip(np.asarray(values, dtype=float), 1e-12, None)
+
+
+def to_suboptimality(loss_vals, init_loss):
+    """
+    Convert raw loss values to normalised suboptimality (Eq. 8 in the paper):
+        subopt(w) = (F(w) - F(w*)) / (F(w^0) - F(w*))
+    where F(w*) = LBFGS_MIN and F(w^0) = init_loss (epoch -1 value).
+    Values are clipped to [1e-12, inf] so log-scale rendering is safe.
+    """
+    arr  = np.asarray(loss_vals, dtype=float)
+    denom = init_loss - LBFGS_MIN
+    if abs(denom) < 1e-15:
+        return safe_clip(arr - LBFGS_MIN)
+    return safe_clip((arr - LBFGS_MIN) / denom)
 
 
 def plot_optimizer(optimizer, lr_seed_metrics):
@@ -159,20 +215,24 @@ def plot_optimizer(optimizer, lr_seed_metrics):
     if n_seeds == 1:
         axes = [axes]
 
-    fig.suptitle(f"{optimizer}  —  {LOSS_KEY}", fontsize=13)
+    y_label = "suboptimality" if USE_SUBOPT else LOSS_KEY
+    fig.suptitle(f"{optimizer}  —  {y_label}", fontsize=13)
 
     for ax, seed in zip(axes, SEEDS):
         ax.set_title(f"seed {seed}")
         ax.set_xlabel("epoch")
-        ax.set_ylabel(LOSS_KEY if ax == axes[0] else "")
-        ax.set_yscale("log")  # log scale on y-axis; tick labels remain raw loss values
+        ax.set_ylabel(y_label if ax == axes[0] else "")
+        ax.set_yscale("log")
 
         for lr in lrs:
             metrics = lr_seed_metrics[lr].get(seed)
             if metrics is None:
                 continue  # result missing or diverged
-            epochs = metrics["epoch"].values
-            loss   = safe_clip(metrics[LOSS_KEY].values)
+            epochs    = metrics["epoch"].values
+            raw_loss  = np.asarray(metrics[LOSS_KEY].values, dtype=float)
+            # epoch -1 is the pre-training checkpoint; use it as F(w^0)
+            init_loss = raw_loss[0] if len(raw_loss) > 0 else raw_loss[0]
+            loss = to_suboptimality(raw_loss, init_loss) if USE_SUBOPT else safe_clip(raw_loss)
             ax.plot(
                 epochs, loss,
                 color=color_map[lr],
@@ -223,11 +283,12 @@ def plot_all_best(best_results):
 
     opt_colors = optimizer_color(best_results.keys())
 
+    y_label = "suboptimality" if USE_SUBOPT else LOSS_KEY
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.set_title(f"Best config — {LOSS_KEY}", fontsize=13)
+    ax.set_title(f"Best config — {y_label}", fontsize=13)
     ax.set_xlabel("epoch")
-    ax.set_ylabel(LOSS_KEY)
-    ax.set_yscale("log")  # log scale on y-axis
+    ax.set_ylabel(y_label)
+    ax.set_yscale("log")
 
     for optimizer, df in sorted(best_results.items()):
         color = opt_colors[optimizer]
@@ -236,7 +297,6 @@ def plot_all_best(best_results):
         if "average_train_loss" in df.columns and LOSS_KEY == "train_loss":
             loss_vals = df["average_train_loss"].values
         else:
-            # Build average from whichever seed columns exist.
             key_suffix = LOSS_KEY.replace("train_loss", "train").replace("val_loss", "val")
             seed_cols = [c for c in df.columns if c.endswith(f"_{key_suffix}")]
             if not seed_cols:
@@ -244,8 +304,10 @@ def plot_all_best(best_results):
                 continue
             loss_vals = df[seed_cols].mean(axis=1).values
 
-        epochs = df["epoch"].values
-        loss   = safe_clip(loss_vals)
+        epochs    = df["epoch"].values
+        raw_loss  = np.asarray(loss_vals, dtype=float)
+        init_loss = raw_loss[0] if len(raw_loss) > 0 else raw_loss[0]
+        loss = to_suboptimality(raw_loss, init_loss) if USE_SUBOPT else safe_clip(raw_loss)
 
         ax.plot(epochs, loss, color=color, linewidth=2.0, label=optimizer)
 
