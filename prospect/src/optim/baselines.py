@@ -222,7 +222,7 @@ class SmoothedLSVRG(Optimizer):
             losses = self.objective.get_indiv_loss(self.weights, with_grad=False)
             
             if self.smoothing == "wasserstein":
-                self.sigmas = get_wasserstein_weights(losses, self.C, self.smooth_coef, epsilon=0.1, K=self.K)
+                self.sigmas = get_wasserstein_weights(losses, self.spectrum, self.C, self.smooth_coef, epsilon=0.1, K=self.K)
                 self.argsort = torch.arange(n)
             else:
                 sorted_losses, self.argsort = torch.sort(losses, stable=True)

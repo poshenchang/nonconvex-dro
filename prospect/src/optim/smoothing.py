@@ -41,11 +41,12 @@ def sinkhorn_knopp(q, p, C, epsilon, max_iters=100, tol=1e-6):
     return P, distance
 
 
-def get_wasserstein_weights(losses, C, shift_cost, epsilon=0.1, K=None):
+def get_wasserstein_weights(losses, spectrum, C, shift_cost, epsilon=0.1, K=None):
     """
     Compute adversarial weights subject to a Wasserstein constraint using an optimized kernel-based formulation.
     
     :param losses: (torch.Tensor) shape (n,) loss values at the current iterate
+    :param spectrum: (torch.Tensor) shape (n,) the base spectral probability weights (e.g., CVaR, ESRM)
     :param C: (torch.Tensor) shape (n, n) cost matrix between data points
     :param shift_cost: (float) the penalty parameter nu for the Wasserstein distance
     :param epsilon: (float) entropy regularization for the Sinkhorn-like algorithm
@@ -61,9 +62,9 @@ def get_wasserstein_weights(losses, C, shift_cost, epsilon=0.1, K=None):
     
     # Matrix-vector multiplications instead of constructing the NxN plan matrix
     w = torch.matmul(K.T, v)
-    z = 1.0 / (w + 1e-16)
+    z = spectrum / (w + 1e-16)
     y = torch.matmul(K, z)
-    q = (v * y) / len(losses)
+    q = v * y
     return q
 
 def get_smooth_weights(losses, spectrum, smooth_coef, smoothing="l2"):

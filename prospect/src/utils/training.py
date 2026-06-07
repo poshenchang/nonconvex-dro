@@ -215,12 +215,17 @@ def compute_training_curve(
         val_objective = get_objective(model_cfg, X_val, y_val, dataset=dataset)
         optimizer = get_optimizer(optim_cfg, train_objective, seed)
         try:
-            result = train_model(optimizer, val_objective, n_epochs)
+            result, iterates = train_model(optimizer, val_objective, n_epochs, save_iters=True)
             exit_code = SUCCESS_CODE
         except OptimizationError as e:
             result = FAIL_CODE
             exit_code = FAIL_CODE
         save_results(result, dataset, model_cfg, optim_cfg, seed, out_path=out_path)
+        if exit_code == SUCCESS_CODE:
+            path = get_path([dataset, var_to_str(model_cfg), var_to_str(optim_cfg)], out_path=out_path)
+            f = os.path.join(path, f"iterates_{seed}.p")
+            with open(f, "wb") as fpath:
+                pickle.dump(iterates, fpath)
         return exit_code
 
 

@@ -124,7 +124,7 @@ class Objective:
                 v = torch.exp(losses_shifted / (self.shift_cost * epsilon))
                 w_val = torch.matmul(self.K.T, v)
                 log_sum_exp = torch.log(w_val + 1e-16) + torch.max(losses) / (self.shift_cost * epsilon)
-                risk = (self.shift_cost * epsilon / n) * torch.sum(log_sum_exp + math.log(n))
+                risk = (self.shift_cost * epsilon) * torch.sum(self.sigmas * log_sum_exp)
             elif self.l2_reg:
                 sorted_losses = torch.sort(self.loss(w, self.X, self.y), stable=True)[0]
                 sm_sigmas = get_smooth_weights_sorted(
@@ -163,7 +163,7 @@ class Objective:
             else:
                 C_sub = self.C
                 K_sub = self.K
-            q = get_wasserstein_weights(losses, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
+            q = get_wasserstein_weights(losses, sigmas, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
             g = torch.matmul(q, self.grad_batch(w, X, y))
         else:
             sorted_losses, perm = torch.sort(self.loss(w, X, y), stable=True)
@@ -195,7 +195,7 @@ class Objective:
                 C_sub = self.C
                 K_sub = self.K
             with torch.no_grad():
-                sm_sigmas = get_wasserstein_weights(losses, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
+                sm_sigmas = get_wasserstein_weights(losses, sigmas, C_sub, self.shift_cost, epsilon=0.1, K=K_sub)
             risk = torch.dot(sm_sigmas, losses)
         else:
             sorted_losses = torch.sort(self.loss(w, X, y), stable=True)[0]

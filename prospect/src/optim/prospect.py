@@ -59,7 +59,7 @@ class Prospect(Optimizer):
         # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights).detach()
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
+            self.lam = get_wasserstein_weights(self.losses, self.sigmas, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -112,7 +112,7 @@ class Prospect(Optimizer):
         # self.losses[i] = self.lrd*loss + (1-self.lrd)*self.losses[i]
         self.losses[i] = loss.detach()
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(self.losses, self.C, self.shift_cost, epsilon=0.1, K=self.K)
+            self.lam = get_wasserstein_weights(self.losses, self.sigmas, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -183,7 +183,7 @@ class ProspectMoreau(Optimizer):
         # Generate loss and gradient tables.
         self.losses = self.objective.get_indiv_loss(self.weights)
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.sigmas, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses, self.sigmas, self.shift_cost, self.penalty
@@ -235,7 +235,7 @@ class ProspectMoreau(Optimizer):
 
         self.losses[j] = loss_j
         if self.penalty == "wasserstein":
-            self.lam = get_wasserstein_weights(self.losses.detach(), self.C, self.shift_cost, epsilon=0.1, K=self.K)
+            self.lam = get_wasserstein_weights(self.losses.detach(), self.sigmas, self.C, self.shift_cost, epsilon=0.1, K=self.K)
         else:
             self.lam = get_smooth_weights(
                 self.losses.detach(), self.sigmas, self.shift_cost, self.penalty
